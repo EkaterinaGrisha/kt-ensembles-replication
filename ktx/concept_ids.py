@@ -48,6 +48,27 @@ def concept_ids_for_valid(dataset: str, valid_fold: int) -> np.ndarray:
     return np.asarray(out, dtype=np.int64)
 
 
+def student_ids_for_valid(dataset: str, valid_fold: int) -> np.ndarray:
+    """Учащийся на каждую строку массива `valid_y_true` уровня компонентов.
+
+    Тот же обход, что и у `concept_ids_for_valid`, только со столбцом uid.
+    Нужен там, где проверочную часть делят на подвыборки: делить её по строкам
+    значит поместить одного учащегося на обе стороны деления, а это делает
+    выбор гиперпараметра оптимистичным.
+    """
+    p = paths.PYKT_ROOT / "data" / dataset / "train_valid_sequences.csv"
+    if not p.exists():
+        raise FileNotFoundError(str(p))
+    df = pd.read_csv(p)
+    df = df[df["fold"] == valid_fold]
+    out: list[int] = []
+    for _, r in df.iterrows():
+        sm = [int(x) for x in str(r["selectmasks"]).split(",")]
+        selected = [i for i, s in enumerate(sm) if s == 1]
+        out.extend([int(r["uid"])] * max(0, len(selected) - 1))
+    return np.asarray(out, dtype=np.int64)
+
+
 def concept_ids_for_test(dataset: str) -> np.ndarray:
     """Concept-id per row of the concept-level ``concept_y_true`` array.
     Uses extract_test_timeline() which already resolves the same CSV walk

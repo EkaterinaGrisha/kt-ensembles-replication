@@ -122,6 +122,32 @@ def bilingual(x, y, ru, en, size=10, weight="400", anchor="start", gap=11) -> st
             + text(x, y + gap, en, size=size - 1, fill=MUTED, anchor=anchor))
 
 
+def nice_step(span: float) -> float:
+    """Круглый шаг шкалы: подписи вида −0.006, а не −0.00696."""
+    import math
+    raw = span / 4
+    mag = 10 ** math.floor(math.log10(raw))
+    for m in (1, 2, 2.5, 5, 10):
+        if raw <= m * mag:
+            return m * mag
+    return 10 * mag
+
+
+def axis_ticks(x, lo: float, hi: float, y: float, nd: int = 4) -> str:
+    """Подписанная шкала под рядами: журналу нужна цена деления, а не только нуль."""
+    import math
+    step = nice_step(hi - lo)
+    first = math.ceil(lo / step) * step
+    parts = [line(x(lo), y, x(hi), y, stroke=RULE)]
+    v = first
+    while v <= hi + 1e-12:
+        parts.append(line(x(v), y, x(v), y + 4, stroke=RULE))
+        label = "0" if abs(v) < step / 100 else signed(v, nd)
+        parts.append(text(x(v), y + 13, label, size=7, fill=MUTED, anchor="middle"))
+        v += step
+    return "".join(parts)
+
+
 def signed(v: float, nd: int = 4) -> str:
     return f"{v:+.{nd}f}".replace("-", "−")
 
@@ -235,7 +261,7 @@ def figure1(points: pd.DataFrame, boot: pd.DataFrame, spread: pd.DataFrame) -> t
 def figure2(gate: pd.DataFrame) -> tuple[str, int]:
     g = gate.groupby(["dataset", "meta_learner"]).lift_gated_vs_best_auc.mean().unstack()
     row_h, pad_t, pad_l, axis_w = 30, 92, 150, 236
-    height = pad_t + row_h * len(ORDER) + 58
+    height = pad_t + row_h * len(ORDER) + 76
     lo = min(0.0, float(g.min().min())) - 0.001
     hi = float(g.max().max()) + 0.002
 
@@ -263,6 +289,7 @@ def figure2(gate: pd.DataFrame) -> tuple[str, int]:
         parts.append(dot(x(inter), y, 4.5, SIMPLE))
         parts.append(text(pad_l + axis_w + 10, y + 4, signed(full), size=8, fill=ELABORATE))
         parts.append(text(pad_l + axis_w + 58, y + 4, signed(inter), size=8, fill=SIMPLE))
+    parts.append(axis_ticks(x, lo, hi, pad_t + row_h * len(ORDER) - 2))
     legend_y = height - 26
     parts.append(dot(4, legend_y - 4, 4, ELABORATE))
     parts.append(text(14, legend_y, "полное взвешивание / full weighting", size=8))
@@ -282,7 +309,7 @@ def figure3(ccce: pd.DataFrame) -> tuple[str, int]:
     st = ccce.groupby("dataset")[[f"lift_{v}_vs_static_auc" for v, *_ in VARIANTS]].mean()
     st.columns = [v for v, *_ in VARIANTS]
     row_h, pad_t, pad_l, axis_w = 32, 96, 150, 236
-    height = pad_t + row_h * len(ORDER) + 62
+    height = pad_t + row_h * len(ORDER) + 80
     lo = float(st.min().min()) - 0.0006
     hi = max(0.0006, float(st.max().max()) + 0.0006)
 
@@ -311,6 +338,7 @@ def figure3(ccce: pd.DataFrame) -> tuple[str, int]:
                           size=8, fill=ELABORATE))
         parts.append(text(pad_l + axis_w + 58, y + 4, signed(st.loc[ds, "no_s1"], 5),
                           size=8, fill=SIMPLE))
+    parts.append(axis_ticks(x, lo, hi, pad_t + row_h * len(ORDER) - 4, nd=5))
     legend_y = height - 30
     for j, (_, ru, en, colour) in enumerate(VARIANTS):
         lx = (j % 2) * 258

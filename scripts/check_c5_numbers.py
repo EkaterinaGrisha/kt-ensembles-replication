@@ -155,10 +155,14 @@ def load() -> dict:
                       "classical": pd.read_csv(
                           ENS / "cluster_bootstrap_gating_classical.csv")},
         "attn_moe": pd.read_csv(ENS / "cluster_bootstrap_attention_moe.csv"),
+        "ccce_cf": pd.read_csv(ENS / "ccce_crossfit_deep.csv"),
         "ccce": pd.read_csv(ENS / "ccce_deep.csv"),
         "ccce_boot": pd.read_csv(ENS / "cluster_bootstrap_ccce.csv"),
         "spread": pd.read_csv(ENS / "prediction_spread.csv"),
         "align": pd.read_csv(ENS / "family_alignment.csv").set_index("dataset"),
+        "gran": pd.read_csv(ENS / "deep_granularity.csv").set_index("dataset"),
+        "seeds": pd.read_csv(ENS / "attention_seed_spread.csv"),
+        "nmin": pd.read_csv(ENS / "gating_nmin_sensitivity.csv"),
         "attn_mps": pd.read_csv(ENS / "attention_gating_deep.csv"),
         "moe_mps": pd.read_csv(ENS / "moe_deep.csv"),
         "multi": {ds: float((np.load(ENS / "classical_concepts" / f"{ds}.npz")
@@ -307,8 +311,35 @@ SCHEMES = {"внимание": "attention", "смесь": "moe"}
 
 
 def check_table7(text: str, a: dict) -> None:
+    """Взвешивание против надстройки: обе схемы на одних и тех же строках."""
     rows = md_table(text, "**Табл. 7.**")
     check(len(rows) == 14, "Т7 / число строк", f"строк {len(rows)}")
+    for r in rows:
+        ds, sub = BACK.get(r[0]), SUBSET.get(r[1])
+        for j, gate in enumerate(GATES, start=2):
+            exp = mean_of(a["gate"][sub], {"dataset": ds, "meta_learner": gate},
+                          "lift_gated_vs_stack_auc")
+            m = re.fullmatch(r"([−+]\d+\.\d+)(?: \((\d)\))?", r[j])
+            if not m:
+                check(False, f"Т7 {r[0]}/{r[1]}/{gate}", f"не разобрана ячейка {r[j]!r}")
+                continue
+            check(matches(m.group(1), exp), f"Т7 {r[0]}/{r[1]}/{gate}",
+                  f"в тексте {m.group(1)!r}, в артефакте {exp:.6f}")
+            b = a["gate_boot"][sub]
+            b = b[(b.dataset == ds) & (b.meta_learner == gate)]
+            if b.empty:
+                check(m.group(2) is None, f"Т7 {r[0]}/{r[1]}/{gate} / значимость",
+                      "бутстрапа нет, а в тексте число есть")
+            else:
+                n = int(b.auc_p_vs_stack_reject_holm.sum())
+                check(m.group(2) is not None and int(m.group(2)) == n,
+                      f"Т7 {r[0]}/{r[1]}/{gate} / значимость",
+                      f"в тексте {m.group(2)}, в артефакте {n}")
+
+
+def check_table8(text: str, a: dict) -> None:
+    rows = md_table(text, "**Табл. 8.**")
+    check(len(rows) == 14, "Т8 / число строк", f"строк {len(rows)}")
     boot = a["attn_moe"]
     for r in rows:
         ds, scheme = BACK.get(r[0]), SCHEMES.get(r[1])
@@ -316,66 +347,96 @@ def check_table7(text: str, a: dict) -> None:
         for j, base in enumerate(("best", "static", "stack"), start=2):
             m = re.fullmatch(r"([−+]\d+\.\d+) \((\d)\)", r[j])
             if not m:
-                check(False, f"Т7 {r[0]}/{r[1]}/{base}", f"не разобрана ячейка {r[j]!r}")
+                check(False, f"Т8 {r[0]}/{r[1]}/{base}", f"не разобрана ячейка {r[j]!r}")
                 continue
             exp = float(d[f"delta_auc_vs_{base}"].mean())
-            check(matches(m.group(1), exp), f"Т7 {r[0]}/{r[1]}/{base}",
+            check(matches(m.group(1), exp), f"Т8 {r[0]}/{r[1]}/{base}",
                   f"в тексте {m.group(1)!r}, в артефакте {exp:.6f}")
             n = int(d[f"auc_p_vs_{base}_reject_holm"].sum())
-            check(int(m.group(2)) == n, f"Т7 {r[0]}/{r[1]}/{base} / значимость",
+            check(int(m.group(2)) == n, f"Т8 {r[0]}/{r[1]}/{base} / значимость",
                   f"в тексте {m.group(2)}, в артефакте {n}")
 
 
 VARIANTS = ["full", "no_s1", "global_s1", "no_s3"]
 
 
-def check_table8(text: str, a: dict) -> None:
+def check_table9(text: str, a: dict) -> None:
     for which, base in ((0, "static"), (1, "best")):
-        rows = md_table(text, "**Табл. 8.**", which)
-        check(len(rows) == 7, f"Т8/{base} / число строк", f"строк {len(rows)}")
+        rows = md_table(text, "**Табл. 9.**", which)
+        check(len(rows) == 7, f"Т9/{base} / число строк", f"строк {len(rows)}")
         for r in rows:
             ds = BACK.get(r[0])
             for j, v in enumerate(VARIANTS, start=1):
                 exp = mean_of(a["ccce"], {"dataset": ds}, f"lift_{v}_vs_{base}_auc")
                 m = re.fullmatch(r"([−+]\d+\.\d+) \((\d)\)", r[j])
                 if not m:
-                    check(False, f"Т8/{base} {r[0]}/{v}", f"не разобрана ячейка {r[j]!r}")
+                    check(False, f"Т9/{base} {r[0]}/{v}", f"не разобрана ячейка {r[j]!r}")
                     continue
-                check(matches(m.group(1), exp), f"Т8/{base} {r[0]}/{v}",
+                check(matches(m.group(1), exp), f"Т9/{base} {r[0]}/{v}",
                       f"в тексте {m.group(1)!r}, в артефакте {exp:.6f}")
                 n = sig_of(a["ccce_boot"], {"dataset": ds, "variant": v},
                            f"auc_p_vs_{base}_reject_holm")
-                check(int(m.group(2)) == n, f"Т8/{base} {r[0]}/{v} / значимость",
+                check(int(m.group(2)) == n, f"Т9/{base} {r[0]}/{v} / значимость",
                       f"в тексте {m.group(2)}, в артефакте {n}")
 
 
-def check_table9(text: str, a: dict) -> None:
-    rows = md_table(text, "**Табл. 9.**")
-    check(len(rows) == 7, "Т9 / число строк", f"строк {len(rows)}")
+def check_table10(text: str, a: dict) -> None:
+    rows = md_table(text, "**Табл. 10.**")
+    check(len(rows) == 7, "Т10 / число строк", f"строк {len(rows)}")
+    simple, stack = a["simple"], a["stack"]
+    gate, gate_boot = a["gate"]["deep"], a["gate_boot"]["deep"]
+    ccce, ccce_boot = a["ccce"], a["ccce_boot"]
     for r in rows:
         ds = BACK.get(r[0])
-        exp_avg = mean_of(a["simple"], {"dataset": ds, "subset": "deep",
-                                        "aggregator": "arithmetic_mean"}, "delta_ece")
-        check(matches(r[1], exp_avg), f"Т9 {r[0]} / усреднение",
-              f"в тексте {r[1]!r}, в артефакте {exp_avg:.6f}")
-        d = a["stack"]
-        d = d[(d.dataset == ds) & (d.subset == "deep") & (d.meta_learner == "xgb_stacked")]
-        if d.empty:
-            check(r[2] == "—", f"Т9 {r[0]} / надстройка", f"в тексте {r[2]!r}, ячейки нет")
-        else:
-            check(matches(r[2], float(d.delta_ece.mean())), f"Т9 {r[0]} / надстройка",
-                  f"в тексте {r[2]!r}, в артефакте {d.delta_ece.mean():.6f}")
-        exp_gate = mean_of(a["gate"]["deep"], {"dataset": ds,
-                                              "meta_learner": "static_concept_weights"},
-                           "lift_gated_vs_best_ece")
-        check(matches(r[3], exp_gate), f"Т9 {r[0]} / взвешивание",
-              f"в тексте {r[3]!r}, в артефакте {exp_gate:.6f}")
-        exp_full = mean_of(a["ccce"], {"dataset": ds}, "lift_full_vs_best_ece")
-        check(matches(r[4], exp_full), f"Т9 {r[0]} / три ступени",
-              f"в тексте {r[4]!r}, в артефакте {exp_full:.6f}")
-        exp_vs = mean_of(a["ccce"], {"dataset": ds}, "lift_full_vs_static_ece")
-        check(matches(r[5], exp_vs), f"Т9 {r[0]} / три ст. против взвешивания",
-              f"в тексте {r[5]!r}, в артефакте {exp_vs:.6f}")
+        d_avg = simple[(simple.dataset == ds) & (simple.subset == "deep")
+                       & (simple.aggregator == "arithmetic_mean")]
+        d_xgb = stack[(stack.dataset == ds) & (stack.subset == "deep")
+                      & (stack.meta_learner == "xgb_stacked")]
+        d_gat = gate[(gate.dataset == ds)
+                     & (gate.meta_learner == "static_concept_weights")]
+        b_gat = gate_boot[(gate_boot.dataset == ds)
+                          & (gate_boot.meta_learner == "static_concept_weights")]
+        d_cc = ccce[ccce.dataset == ds]
+        b_cc = ccce_boot[(ccce_boot.dataset == ds) & (ccce_boot.variant == "full")]
+        cells = [
+            ("усреднение", d_avg.delta_ece.mean(),
+             int(d_avg.ece_p_reject_holm.sum())),
+            ("надстройка", None if d_xgb.empty else d_xgb.delta_ece.mean(),
+             None if d_xgb.empty else int(d_xgb.ece_p_reject_holm.sum())),
+            ("взвешивание", d_gat.lift_gated_vs_best_ece.mean(),
+             None if b_gat.empty else int(b_gat.ece_p_vs_best_reject_holm.sum())),
+            ("три ступени", d_cc.lift_full_vs_best_ece.mean(),
+             None if b_cc.empty else int(b_cc.ece_p_vs_best_reject_holm.sum())),
+            ("три ст. против взвешивания", d_cc.lift_full_vs_static_ece.mean(),
+             None if b_cc.empty else int(b_cc.ece_p_vs_static_reject_holm.sum())),
+        ]
+        for j, (name, exp, sig) in enumerate(cells, start=1):
+            if exp is None:
+                check(r[j] == "—", f"Т10 {r[0]} / {name}", f"в тексте {r[j]!r}")
+                continue
+            m = re.fullmatch(r"([−+]\d+\.\d+)(?: \((\d)\))?", r[j])
+            if not m:
+                check(False, f"Т10 {r[0]} / {name}", f"не разобрана ячейка {r[j]!r}")
+                continue
+            check(matches(m.group(1), exp), f"Т10 {r[0]} / {name}",
+                  f"в тексте {m.group(1)!r}, в артефакте {exp:.6f}")
+            if sig is not None:
+                check(m.group(2) is not None and int(m.group(2)) == sig,
+                      f"Т10 {r[0]} / {name} / значимость",
+                      f"в тексте {m.group(2)}, в артефакте {sig}")
+
+
+def check_crossfit(text: str, a: dict) -> None:
+    """Третий блок таблицы 9: первая ступень обучена вне блока."""
+    rows = md_table(text, "То же против взвешивания, когда первая и третья ступени")
+    check(len(rows) == 7, "кросс-фит / число строк", f"строк {len(rows)}")
+    cf = a["ccce_cf"]
+    for r in rows:
+        ds = BACK.get(r[0])
+        for j, v in enumerate(VARIANTS, start=1):
+            exp = mean_of(cf, {"dataset": ds}, f"lift_{v}_vs_static_auc")
+            check(matches(r[j], exp), f"кросс-фит {r[0]}/{v}",
+                  f"в тексте {r[j]!r}, в артефакте {exp:.6f}")
 
 
 # ------------------------------------------------------------------ проза
@@ -502,6 +563,42 @@ def check_prose(text: str, a: dict) -> None:
     diff = (g["deep"]["global_stack_concept_intercept"]
             - g["deep"]["static_concept_weights"])
 
+    # взвешивание против надстройки — на одних и тех же строках
+    for key, name, pat_med, pat_lo, pat_hi in (
+            ("classical", "простые",
+             r"у надстройки медианно на \+(\d+\.\d+), у глубоких", None, None),
+            ("deep", "глубокие",
+             r"у глубоких — на \+(\d+\.\d+)", None, None)):
+        g = gate[key]
+        g = g[g.meta_learner == "static_concept_weights"].groupby(
+            "dataset").lift_gated_vs_stack_auc.mean()
+        claim(s, f"5.3 против надстройки, {name}", pat_med, g.median())
+    gd = gate["deep"]
+    gd = gd[gd.meta_learner == "static_concept_weights"].groupby(
+        "dataset").lift_gated_vs_stack_auc.mean()
+    claim(s, "5.3 против надстройки, худший набор",
+          r"проигрыш (−\d+\.\d+) значим", gd.min())
+
+    nm = a["nmin"]
+    for key, name, pats in (
+            ("classical", "простые",
+             (r"полное взвешивание\s*при этом сдвигается с \+(\d+\.\d+) на \+\d+\.\d+",
+              r"сдвигается с \+\d+\.\d+ на \+(\d+\.\d+), вариант",
+              r"вариант со свободным членом стоит на\s*\+(\d+\.\d+)")),
+            ("deep", "глубокие",
+             (r"у глубоких — с \+(\d+\.\d+) на \+\d+\.\d+",
+              r"у глубоких — с \+\d+\.\d+ на \+(\d+\.\d+) против",
+              r"против неподвижных \+(\d+\.\d+)"))):
+        x = nm[nm.subset == key]
+        t = x.groupby(["n_min", "dataset"]).agg(
+            full=("lift_full_vs_best", "mean"),
+            inter=("lift_intercept_vs_best", "mean"),
+            gap=("gap_full_minus_intercept", "mean"))
+        by = t.groupby("n_min")
+        claim(s, f"5.3 порог, {name}, полное минимум", pats[0], by.full.mean().min())
+        claim(s, f"5.3 порог, {name}, полное максимум", pats[1], by.full.mean().max())
+        claim(s, f"5.3 порог, {name}, свободный член", pats[2], by.inter.mean().max())
+
     s = norm(section(text, "5.4 Внимание и разреженная смесь"))
     at = attn_moe[attn_moe.scheme == "attention"]
     mo = attn_moe[attn_moe.scheme == "moe"]
@@ -558,8 +655,28 @@ def check_prose(text: str, a: dict) -> None:
     claim(s, "5.4 расхождение запусков, внимание",
           r"сместилась не более чем на (\d+\.\d+)", d_at.max())
     claim(s, "5.4 расхождение запусков, смесь", r"смеси —\s*до (\d+\.\d+)", d_mo.max())
+    seeds = a["seeds"]
+    for scheme, ru, pats in (
+            ("attention", "внимание",
+             (r"У внимания размах по начальным состояниям внутри ячейки медианно "
+              r"(\d+\.\d+)", r"медианно \d+\.\d+, наибольший (\d+\.\d+), и в четырёх")),
+            ("moe", "смесь",
+             (r"медианно (\d+\.\d+) при наибольшем", r"при наибольшем (\d+\.\d+)"))):
+        x = seeds[seeds.scheme == scheme]
+        per = x.groupby(["dataset", "fold"]).lift_vs_static.agg(["min", "max"])
+        span = per["max"] - per["min"]
+        claim(s, f"5.4 сиды, {ru}, медиана размаха", pats[0], span.median())
+        claim(s, f"5.4 сиды, {ru}, наибольший размах", pats[1], span.max())
+        flip = int(((per["min"] < 0) & (per["max"] > 0)).sum())
+        if scheme == "attention":
+            word_claim(s, "5.4 сиды, внимание, смена знака",
+                       r"и в (\S+) ячейках из тридцати пяти знак разности", flip)
     s7 = norm(section(text, "7. Ограничения"))
-    claim(s7, "7 расхождение запусков", r"различающиеся до (\d+\.\d+)", d_mo.max())
+    claim(s7, "7 расхождение запусков", r"разошлись до (\d+\.\d+)", d_mo.max())
+    seeds = a["seeds"]
+    per = seeds.groupby(["dataset", "fold", "scheme"]).lift_vs_static.agg(["min", "max"])
+    claim(s7, "7 размах по начальным состояниям",
+          r"размах до (\d+\.\d+)", (per["max"] - per["min"]).max())
     al = a["align"]
     ok = al[al.status == "ok"]
     word_claim(s7, "7 выравнивание, число наборов",
@@ -595,6 +712,39 @@ def check_prose(text: str, a: dict) -> None:
           bs.no_s1.min())
     claim(s, "5.5 без первой против лучшей максимум",
           r"без первой ступени: от −\d+\.\d+ до \+(\d+\.\d+)", bs.no_s1.max())
+
+    # кросс-фит первой ступени
+    s55 = norm(section(text, "5.5 Трёхступенчатый ансамбль"))
+    cf = a["ccce_cf"].groupby("dataset")[
+        [f"lift_{v}_vs_static_auc" for v in VARIANTS]].mean()
+    cf.columns = VARIANTS
+    st_full = ccce.groupby("dataset").lift_full_vs_static_auc.mean()
+    claim(s55, "5.5 кросс-фит, меньшая потеря",
+          r"на диапазон от (−\d+\.\d+) до −\d+\.\d+", cf.full.max())
+    claim(s55, "5.5 кросс-фит, большая потеря",
+          r"на диапазон от −\d+\.\d+ до (−\d+\.\d+)", cf.full.min())
+    claim(s55, "5.5 кросс-фит, наибольший рост",
+          r"наибольший рост потери — (\d+\.\d+)", -(cf.full - st_full).min())
+    claim(s55, "5.5 кросс-фит, без первой ступени, минимум",
+          r"от (−\d+\.\d+) до −\d+\.\d+ и от", cf.no_s1.min())
+    claim(s55, "5.5 кросс-фит, без первой ступени, максимум",
+          r"от −\d+\.\d+ до (−\d+\.\d+) и от", cf.no_s1.max())
+    claim(s55, "5.5 кросс-фит, общая ступень, минимум",
+          r"и от (−\d+\.\d+) до \+\d+\.\d+", cf.global_s1.min())
+    claim(s55, "5.5 кросс-фит, общая ступень, максимум",
+          r"и от −\d+\.\d+ до \+(\d+\.\d+)", cf.global_s1.max())
+
+    # уровень подробности
+    gr = a["gran"]
+    s23 = norm(section(text, "2.3 Порядок объединения"))
+    for pat, val in (
+            (r"становится в 1\.18, 1\.45 и (\d+\.\d+) раза больше",
+             gr.loc["ednet", "expansion"]),
+            (r"она поднимается с (\d+\.\d+) до \d+\.\d+",
+             gr.loc["ednet", "auc_best_question"]),
+            (r"поднимается с \d+\.\d+ до (\d+\.\d+)",
+             gr.loc["ednet", "auc_best_concept"])):
+        claim(s23, f"2.3 уровень подробности {pat[:24]}", pat, float(val))
 
     s = norm(section(text, "5.6 Калибровка"))
     ge = gate["deep"][gate["deep"].meta_learner == "static_concept_weights"]
@@ -705,7 +855,8 @@ def check_abstracts(text: str, a: dict) -> None:
           -st.full.min())
 
     n_ru, n_en = len(ru.split()), len(en.split())
-    check(205 <= n_ru <= 220, "аннотация рус / длина", f"{n_ru} слов, нужно 205-220")
+    # журнал требует 200-300 слов от обеих аннотаций
+    check(200 <= n_ru <= 300, "аннотация рус / длина", f"{n_ru} слов, нужно 200-300")
     check(200 <= n_en <= 300, "аннотация англ / длина", f"{n_en} слов, нужно 200-300")
 
     kw_ru = [x for x in text.split("**Ключевые слова:**")[1].split("**Для цитирования")[0]
@@ -785,6 +936,8 @@ def main() -> int:
     check_table7(text, a)
     check_table8(text, a)
     check_table9(text, a)
+    check_table10(text, a)
+    check_crossfit(text, a)
     check_prose(text, a)
     check_abstracts(text, a)
     check_citations(text)

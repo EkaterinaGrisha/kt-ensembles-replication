@@ -220,10 +220,16 @@ def paired_bootstrap(
 
     lo = float(np.quantile(diffs, alpha / 2))
     hi = float(np.quantile(diffs, 1 - alpha / 2))
-    # two-sided bootstrap p: how often the resampled diff is on the other side of 0
-    frac_le0 = float(np.mean(diffs <= 0))
-    frac_ge0 = float(np.mean(diffs >= 0))
-    p = float(min(1.0, 2.0 * min(frac_le0, frac_ge0)))
+    # Two-sided bootstrap p: how often the resampled difference falls on the
+    # other side of zero. The count is shifted by one and the denominator by
+    # one more (Davison & Hinkley, §4.2): a resampling p-value can never be
+    # zero — the observed sample is itself one of the possible resamples — and
+    # reporting 0.000 claims a certainty the procedure cannot deliver. The
+    # floor is 2 / (B + 1), which is the resolution the number of resamples
+    # actually buys.
+    n_le0 = int(np.sum(diffs <= 0))
+    n_ge0 = int(np.sum(diffs >= 0))
+    p = float(min(1.0, 2.0 * (min(n_le0, n_ge0) + 1) / (diffs.size + 1)))
     return ComparisonResult(
         metric=metric_name, value_a=float(metric_fn(y, a)), value_b=float(metric_fn(y, b)),
         diff=obs, ci_low=lo, ci_high=hi, p_value=p,
@@ -307,9 +313,9 @@ def unpaired_bootstrap_metric(
 
     lo = float(np.quantile(diffs, alpha / 2))
     hi = float(np.quantile(diffs, 1 - alpha / 2))
-    frac_le0 = float(np.mean(diffs <= 0))
-    frac_ge0 = float(np.mean(diffs >= 0))
-    p = float(min(1.0, 2.0 * min(frac_le0, frac_ge0)))
+    n_le0 = int(np.sum(diffs <= 0))
+    n_ge0 = int(np.sum(diffs >= 0))
+    p = float(min(1.0, 2.0 * (min(n_le0, n_ge0) + 1) / (diffs.size + 1)))
     return ComparisonResult(
         metric=metric_name,
         value_a=float(metric_fn(ya, pa)),

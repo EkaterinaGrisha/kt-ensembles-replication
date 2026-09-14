@@ -102,7 +102,7 @@ def _metrics(y, p, n_bins=15):
     }
 
 
-def process_cell(dataset, fold):
+def process_cell(dataset, fold, cross_fit: int = 0):
     st = _stack_deep(dataset, fold)
     if st is None:
         return None
@@ -143,11 +143,12 @@ def process_cell(dataset, fold):
     # ``no_s1`` = skip Stage 1 pre-calibration (StaticConceptWeights + post-cal);
     # ``global_s1`` = replace concept-aware isotonic with plain global isotonic;
     # ``no_s3`` = same as full but without Stage 3 post-cal.
+    cf = cross_fit
     variants = {
-        "full":       CCCE(n_min=30, pre_cal="concept", post_cal=True),
-        "no_s1":      CCCE(n_min=30, pre_cal="none",    post_cal=True),
-        "global_s1":  CCCE(n_min=30, pre_cal="global",  post_cal=True),
-        "no_s3":      CCCE(n_min=30, pre_cal="concept", post_cal=False),
+        "full":       CCCE(n_min=30, pre_cal="concept", post_cal=True,  cross_fit=cf),
+        "no_s1":      CCCE(n_min=30, pre_cal="none",    post_cal=True,  cross_fit=cf),
+        "global_s1":  CCCE(n_min=30, pre_cal="global",  post_cal=True,  cross_fit=cf),
+        "no_s3":      CCCE(n_min=30, pre_cal="concept", post_cal=False, cross_fit=cf),
     }
     ccce_metrics = {}
     for tag, ens in variants.items():
@@ -189,6 +190,8 @@ def process_cell(dataset, fold):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--datasets", nargs="+", default=DATASETS)
+    ap.add_argument("--cross-fit", type=int, default=0,
+                    help="K блоков для обучения первой ступени вне выборки; 0 — как было")
     ap.add_argument("--folds", nargs="+", type=int, default=FOLDS)
     ap.add_argument("--out", type=Path,
                     default=paths.ARTIFACTS_DIR / "ensembles" / "ccce_deep.csv")
@@ -198,7 +201,7 @@ def main():
     rows = []
     for ds in args.datasets:
         for fold in args.folds:
-            r = process_cell(ds, fold)
+            r = process_cell(ds, fold, args.cross_fit)
             if r is None:
                 print(f"[{ds:22s} f{fold}] SKIP"); continue
             best_tag = max(("full", "no_s1", "global_s1", "no_s3"),

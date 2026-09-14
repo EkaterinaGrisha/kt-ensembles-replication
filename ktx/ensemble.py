@@ -1085,8 +1085,10 @@ class MixtureOfExperts(EnsembleBase):
       * **Computational efficiency at inference**: skip inactive
         components. For KT with k=4 this doesn't matter, but the
         recipe generalises to k=8+ (heterogeneous cross-family).
-      * **Balancing regularisation**: an auxiliary load-balancing loss
-        (Shazeer 2017 eq. 12) prevents any single component from being
+      * **Balancing regularisation**: an auxiliary load-balancing penalty
+        in the spirit of Shazeer 2017, though not their equation 12: here it
+        is k times the sum of squared mean gate weights, which is minimised
+        when the load is uniform. It prevents any single component from being
         chosen for every row.
 
     Training is identical to AttentionGating except for the top-k
@@ -1318,7 +1320,8 @@ class CCCE(EnsembleBase):
     name = "ccce"
 
     def __init__(self, n_min: int = 30, shrinkage_lambda: float = 0.0,
-                 pre_cal: str = "concept",  post_cal: bool = True) -> None:
+                 pre_cal: str = "concept",  post_cal: bool = True,
+                 cross_fit: int = 0) -> None:
         """
         Parameters
         ----------
@@ -1335,6 +1338,15 @@ class CCCE(EnsembleBase):
         post_cal : bool
             Whether Stage 3 global isotonic post-calibration is applied
             Ablation: does post-cal help beyond Stage 2 gating?
+        cross_fit : int
+            When greater than one, Stage 1 (and, if requested, Stage 3) are
+            fitted out of fold inside the validation set: the columns the gate
+            learns from are produced by calibrators that never saw the row they
+            transform. With the default of zero the calibrators are fitted and
+            applied on the same rows, which is what the first version did — and
+            what makes a per-concept isotonic on thirty observations look better
+            on the fitting set than it is. The two settings separate a real
+            mechanism from ordinary overfitting of the first stage.
         """
         from .calibration import IsotonicCalibration
         if pre_cal not in {"concept", "global", "none"}:
@@ -1343,6 +1355,7 @@ class CCCE(EnsembleBase):
         self.shrinkage_lambda = float(shrinkage_lambda)
         self.pre_cal = pre_cal
         self.post_cal = bool(post_cal)
+        self.cross_fit = int(cross_fit)
         self._pre_calibrators: list = []  # length k, one per component (may be empty)
         self._gate = StaticConceptWeights(n_min=n_min)
         self._post_calibrator = IsotonicCalibration() if self.post_cal else None
@@ -1375,32 +1388,81 @@ class CCCE(EnsembleBase):
         k = p.shape[1]
 
         # STAGE 1: fit per-component pre-calibration (concept-aware / global / none)
-        from .calibration import IsotonicCalibration
-        self._pre_calibrators = []
-        if self.pre_cal == "concept":
-            for m in range(k):
-                cal = ConceptAwareIsotonic(
-                    n_min=self.n_min, shrinkage_lambda=self.shrinkage_lambda,
-                ).fit(p[:, m], y, c)
-                self._pre_calibrators.append(cal)
-        elif self.pre_cal == "global":
-            for m in range(k):
-                cal = IsotonicCalibration().fit(p[:, m], y)
-                self._pre_calibrators.append(cal)
-        # else "none": leave empty; _apply_pre_calibration returns input unchanged
-        p_cal = self._apply_pre_calibration(p, c)
+        self._pre_calibrators = self._fit_pre_calibrators(p, y, c, k)
+
+        # Columns the gate learns from. Without cross-fitting they come from
+        # calibrators that already saw these very rows; with it, from calibrators
+        # fitted on the other folds.
+        p_cal_fit = (self._crossfit_pre(p, y, c, k) if self.cross_fit > 1
+                     else self._apply_pre_calibration(p, c))
 
         # STAGE 2: fit concept-conditional gating on (possibly) calibrated components
-        self._gate.fit(p_cal, y, valid_concepts=c)
+        self._gate.fit(p_cal_fit, y, valid_concepts=c)
 
         # STAGE 3: fit global isotonic on ensemble output (if requested)
         if self._post_calibrator is not None:
-            gate_pred = self._gate.predict(p_cal, test_concepts=c)
+            if self.cross_fit > 1:
+                gate_pred = self._crossfit_gate(p_cal_fit, y, c)
+            else:
+                gate_pred = self._gate.predict(p_cal_fit, test_concepts=c)
             self._post_calibrator.fit(gate_pred, y)
 
         self._fitted = True
         return self
 
+    # ─── stage-1 helpers ─────────────────────────────────────────────────── #
+
+    def _fit_pre_calibrators(self, p, y, c, k):
+        """Calibrators used at predict time: fitted on the whole validation set."""
+        from .calibration import ConceptAwareIsotonic, IsotonicCalibration
+        out = []
+        if self.pre_cal == "concept":
+            for m in range(k):
+                out.append(ConceptAwareIsotonic(
+                    n_min=self.n_min, shrinkage_lambda=self.shrinkage_lambda,
+                ).fit(p[:, m], y, c))
+        elif self.pre_cal == "global":
+            for m in range(k):
+                out.append(IsotonicCalibration().fit(p[:, m], y))
+        return out
+
+    def _folds(self, n: int):
+        """Deterministic split of the validation rows into ``cross_fit`` parts."""
+        rng = np.random.default_rng(0)
+        return np.array_split(rng.permutation(n), self.cross_fit)
+
+    def _crossfit_pre(self, p, y, c, k):
+        """Stage-1 outputs produced out of fold: no row is calibrated by a
+        calibrator that saw it."""
+        if self.pre_cal == "none":
+            return p
+        from .calibration import ConceptAwareIsotonic, IsotonicCalibration
+        out = np.empty_like(p)
+        for held in self._folds(p.shape[0]):
+            mask = np.ones(p.shape[0], dtype=bool)
+            mask[held] = False
+            for m in range(k):
+                if self.pre_cal == "concept":
+                    cal = ConceptAwareIsotonic(
+                        n_min=self.n_min, shrinkage_lambda=self.shrinkage_lambda,
+                    ).fit(p[mask, m], y[mask], c[mask])
+                    out[held, m] = cal.transform(p[held, m], c[held])
+                else:
+                    cal = IsotonicCalibration().fit(p[mask, m], y[mask])
+                    out[held, m] = cal.transform(p[held, m])
+        return out
+
+    def _crossfit_gate(self, p_cal, y, c):
+        """Gate predictions produced out of fold, so stage 3 is not fitted on
+        the gate's own training rows."""
+        out = np.empty(p_cal.shape[0], dtype=float)
+        for held in self._folds(p_cal.shape[0]):
+            mask = np.ones(p_cal.shape[0], dtype=bool)
+            mask[held] = False
+            gate = StaticConceptWeights(n_min=self.n_min)
+            gate.fit(p_cal[mask], y[mask], valid_concepts=c[mask])
+            out[held] = gate.predict(p_cal[held], test_concepts=c[held])
+        return out
     def predict(self, test_probs, test_concepts=None) -> np.ndarray:  # type: ignore[override]
         if not self._fitted:
             raise RuntimeError("call fit(valid_probs, valid_labels, valid_concepts) before predict")

@@ -68,7 +68,8 @@ DATASETS = ["assist2009", "assist2015", "assist2017", "algebra2005",
             "bridge2algebra2006", "assist2012", "ednet"]
 FOLDS = [0, 1, 2, 3, 4]
 DEEP_MODELS = ["dkt", "sakt", "akt", "simplekt"]
-GATING_HEADS = ["static_concept_weights", "linear_gating"]
+GATING_HEADS = ["static_concept_weights", "global_stack_concept_intercept",
+                "linear_gating"]
 DEEP_ROOT = paths.ARTIFACTS_DIR / "predictions"
 
 
@@ -157,6 +158,12 @@ def bootstrap_cell(dataset, fold, n_boot, seed):
         try:
             if ml_name == "static_concept_weights":
                 ens = StaticConceptWeights(n_min=30).fit(vmatrix, vy, valid_concepts=vconc)
+                gpred = ens.predict(tmatrix, test_concepts=tconc)
+            elif ml_name == "global_stack_concept_intercept":
+                # Абляция: наклоны общие, свой у компонента только свободный член.
+                from ktx.ensemble import GlobalStackWithConceptIntercept
+                ens = GlobalStackWithConceptIntercept(n_min=30).fit(
+                    vmatrix, vy, valid_concepts=vconc)
                 gpred = ens.predict(tmatrix, test_concepts=tconc)
             else:
                 ctx_v = vconc.reshape(-1, 1).astype(np.float64)
