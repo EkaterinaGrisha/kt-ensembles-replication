@@ -27,7 +27,7 @@
 Геометрия: рисунок шириной 512 единиц печатается как 13 см при 300 dpi (журнал
 разрешает 14).
 
-Выход (research/paper/figures/):
+Выход (paper/figures/):
   c5_fig1_reliability.{svg,png,pdf}
   c5_fig2_intercept.{svg,png,pdf}
   c5_fig3_ccce.{svg,png,pdf}
@@ -133,10 +133,22 @@ def nice_step(span: float) -> float:
     return 10 * mag
 
 
-def axis_ticks(x, lo: float, hi: float, y: float, nd: int = 4) -> str:
+def tick_decimals(step: float) -> int:
+    """Знаков после запятой ровно столько, сколько несёт шаг шкалы.
+
+    Шаг круглый, поэтому подпись «−0.006» точна; печать пяти знаков дописала бы
+    к ней два нуля, которых в цене деления нет.
+    """
+    import math
+    return max(0, -math.floor(math.log10(step) + 1e-9))
+
+
+def axis_ticks(x, lo: float, hi: float, y: float, nd: int | None = None) -> str:
     """Подписанная шкала под рядами: журналу нужна цена деления, а не только нуль."""
     import math
     step = nice_step(hi - lo)
+    if nd is None:
+        nd = tick_decimals(step)
     first = math.ceil(lo / step) * step
     parts = [line(x(lo), y, x(hi), y, stroke=RULE)]
     v = first
@@ -167,7 +179,17 @@ def equal_mass_bins(y: np.ndarray, p: np.ndarray, n_bins: int = BINS):
 
 
 def reliability_points() -> pd.DataFrame:
-    """Считает и сохраняет точки диаграмм: лучшая одиночная модель и усреднение."""
+    """Точки диаграмм: лучшая одиночная модель и усреднение.
+
+    Считаются из файлов предсказаний, а результат сохраняется рядом с
+    остальными таблицами. Где предсказаний нет — в репозитории воспроизведения
+    их полтора гигабайта, и они туда не переносятся, — берётся сохранённый
+    результат: рисунок должен собираться там же, где собираются таблицы.
+    """
+    saved = ENS / "reliability_points.csv"
+    if not PRED.exists() and saved.exists():
+        print(f"[рис. 1] предсказаний нет, беру {saved.name}")
+        return pd.read_csv(saved)
     boot = pd.read_csv(ENS / "cluster_bootstrap_simple_ensembles.csv")
     rows = []
     for ds in RELIABILITY_SETS:
@@ -181,6 +203,9 @@ def reliability_points() -> pd.DataFrame:
         for model in DEEP:
             f = PRED / ds / f"{model}_fold{RELIABILITY_FOLD}.npz"
             if not f.exists():
+                if saved.exists():
+                    print(f"[рис. 1] нет {f.name}, беру {saved.name}")
+                    return pd.read_csv(saved)
                 sys.exit(f"ФАТАЛЬНО: нет предсказаний {f}")
             d = np.load(f)
             y = np.asarray(d["y_true"]).astype(int)
@@ -203,7 +228,7 @@ def figure1(points: pd.DataFrame, boot: pd.DataFrame, spread: pd.DataFrame) -> t
     panel_w = ((W - pad_l - pad_r - gap * (len(RELIABILITY_SETS) - 1))
                / len(RELIABILITY_SETS))
     panel_h = 150
-    height = pad_t + panel_h + 104
+    height = pad_t + panel_h + 116
     parts = [rect(0, 0, W, height, fill="#FFFFFF")]
     parts.append(bilingual(0, 18, "Рис. 1. Диаграммы надёжности: усреднение стягивает "
                            "вероятности к середине",
@@ -227,19 +252,27 @@ def figure1(points: pd.DataFrame, boot: pd.DataFrame, spread: pd.DataFrame) -> t
             parts.append(polyline(pts, colour))
             for x, y in pts:
                 parts.append(dot(x, y, 2.0, colour))
+        # Цена деления по горизонтали: без неё панель показывает форму кривой,
+        # но не говорит, на каких вероятностях она эту форму имеет.
+        for v in (0.0, 0.5, 1.0):
+            xv = x0 + v * panel_w
+            parts.append(line(xv, y0 + panel_h, xv, y0 + panel_h + 4, stroke=RULE))
+            parts.append(text(xv, y0 + panel_h + 13, f"{v:.1f}".rstrip("0").rstrip(".")
+                              if v in (0.0, 1.0) else f"{v:.1f}",
+                              size=7, fill=MUTED, anchor="middle"))
         cell = boot[(boot.dataset == ds) & (boot.subset == "deep")
                     & (boot.aggregator == "arithmetic_mean")]
         sp = spread[(spread.dataset == ds) & (spread.subset == "deep")]
-        parts.append(text(x0, y0 + panel_h + 15,
+        parts.append(text(x0, y0 + panel_h + 27,
                           f"ошибка калибровки {signed(cell.delta_ece.mean())}",
                           size=8, fill=INK))
-        parts.append(text(x0, y0 + panel_h + 25,
+        parts.append(text(x0, y0 + panel_h + 37,
                           f"calibration error {signed(cell.delta_ece.mean())}",
                           size=7, fill=MUTED))
-        parts.append(text(x0, y0 + panel_h + 38,
+        parts.append(text(x0, y0 + panel_h + 50,
                           f"разброс {sp.best_std.mean():.4f} → {sp.ensemble_std.mean():.4f}",
                           size=8, fill=INK))
-        parts.append(text(x0, y0 + panel_h + 48,
+        parts.append(text(x0, y0 + panel_h + 60,
                           f"spread {sp.best_std.mean():.4f} → {sp.ensemble_std.mean():.4f}",
                           size=7, fill=MUTED))
     parts.append(text(pad_l - 5, pad_t + panel_h + 2, "0", size=8, fill=MUTED, anchor="end"))
@@ -262,8 +295,12 @@ def figure2(gate: pd.DataFrame) -> tuple[str, int]:
     g = gate.groupby(["dataset", "meta_learner"]).lift_gated_vs_best_auc.mean().unstack()
     row_h, pad_t, pad_l, axis_w = 30, 92, 150, 236
     height = pad_t + row_h * len(ORDER) + 76
-    lo = min(0.0, float(g.min().min())) - 0.001
-    hi = float(g.max().max()) + 0.002
+    # Границы — по тем двум рядам, которые рисуются. Третий вентиль в расчёт
+    # границ не входит: он уходит дальше влево, растягивает размах и уводит шаг
+    # на целый порядок, отчего на шкале остаётся две подписи вместо четырёх.
+    drawn = g[["static_concept_weights", "global_stack_concept_intercept"]]
+    lo = min(0.0, float(drawn.min().min())) - 0.001
+    hi = float(drawn.max().max()) + 0.002
 
     def x(v: float) -> float:
         return pad_l + (v - lo) / (hi - lo) * axis_w
@@ -338,7 +375,7 @@ def figure3(ccce: pd.DataFrame) -> tuple[str, int]:
                           size=8, fill=ELABORATE))
         parts.append(text(pad_l + axis_w + 58, y + 4, signed(st.loc[ds, "no_s1"], 5),
                           size=8, fill=SIMPLE))
-    parts.append(axis_ticks(x, lo, hi, pad_t + row_h * len(ORDER) - 4, nd=5))
+    parts.append(axis_ticks(x, lo, hi, pad_t + row_h * len(ORDER) - 4))
     legend_y = height - 30
     for j, (_, ru, en, colour) in enumerate(VARIANTS):
         lx = (j % 2) * 258

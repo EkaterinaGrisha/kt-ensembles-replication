@@ -102,7 +102,7 @@ def extract_test_timeline(dataset: str) -> TestTimeline:
     is monotonic within each student across CSV windows (long students are
     split into multiple 200-length rows in test_sequences.csv — the previous
     per-window index was reset to 0 on every window, which broke chronology
-    for anything sorting by (uid, order); see notes/14_rq2_audit.md P0-1).
+    for anything sorting by (uid, order)).
 
     `is_repeat` follows pyKT convention: 0 = start of a new question
     interaction, 1 = continuation (another concept row of the same multi-KC
@@ -145,3 +145,73 @@ def extract_test_timeline(dataset: str) -> TestTimeline:
         offset += len(predicted)
     long_df = pd.DataFrame(rows)
     return TestTimeline(dataset=dataset, df=long_df, n_concept_preds=offset)
+
+
+# --- Уровень заданий -------------------------------------------------------- #
+
+def _interaction_columns(path, fold: int | None, columns: list[str],
+                         per_row: list[str] = ()) -> dict:
+    """Столбцы файла взаимодействий, склеенные в сплошные массивы.
+
+    Предобработка библиотеки нумерует взаимодействия сквозным счётчиком внутри
+    файла (`get_inter_qidx`), поэтому склейка строк в порядке файла и есть та
+    нумерация, на которую ссылаются сохранённые номера строк.
+    """
+    df = pd.read_csv(path)
+    if fold is not None:
+        df = df[df["fold"] == fold]
+    out = {c: np.concatenate([np.fromstring(s, sep=",", dtype=np.int64)
+                              for s in df[c]]) for c in columns}
+    if per_row:
+        lengths = np.array([s.count(",") + 1 for s in df[columns[0]]], dtype=np.int64)
+        for c in per_row:
+            out[c] = np.repeat(df[c].to_numpy(dtype=np.int64), lengths)
+    return out
+
+
+def question_level_concepts(dataset: str, valid_fold: int,
+                            valid_keys: np.ndarray, test_keys: np.ndarray,
+                            valid_y: np.ndarray, test_y: np.ndarray,
+                            ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Компонент знания и учащийся на каждую строку-задание.
+
+    Строка уровня заданий — одно взаимодействие с заданием; если задание
+    отнесено к нескольким компонентам, предобработка разворачивает его в
+    несколько строк уровня пар, а предсказание на уровне заданий собирается по
+    первой из них. Её сквозной номер и сохранён рядом с предсказаниями
+    (`valid_cidxs_q_pykt`, `test_cidxs`). Поэтому компонент строки-задания — это
+    первый компонент задания: то же соглашение, что и у простых моделей.
+
+    Номера строк — не коды компонентов, а индексы: валидационные нумеруют
+    взаимодействия `train_valid.csv` внутри своего разбиения, тестовые —
+    взаимодействия `test.csv`. Отсюда и восстановление: взять столбец
+    компонентов того же файла и проиндексировать его этими номерами.
+
+    Тем же способом берётся учащийся: он нужен там, где валидационную часть
+    делят на блоки, — делить её по строкам значило бы поместить одного учащегося
+    на обе стороны деления.
+
+    Соответствие проверяется ответами: по тем же номерам берётся столбец
+    ответов и сверяется с сохранёнными. Если номера относятся не к тому файлу
+    или не к тому разбиению, проверка падает, а не портит расчёт молча.
+    """
+    root = paths.PYKT_ROOT / "data" / dataset
+    tv, te = root / "train_valid.csv", root / "test.csv"
+    if not tv.exists() or not te.exists():
+        raise FileNotFoundError(str(tv if not tv.exists() else te))
+
+    v = _interaction_columns(tv, valid_fold, ["concepts", "responses"], ["uid"])
+    t = _interaction_columns(te, None, ["concepts", "responses"])
+    for name, cols, keys, y in (("валидационной", v, valid_keys, valid_y),
+                                ("тестовой", t, test_keys, test_y)):
+        if keys.max() >= cols["responses"].size:
+            raise ValueError(
+                f"{dataset}: номер строки {keys.max()} выходит за пределы "
+                f"{name} части ({cols['responses'].size} взаимодействий)")
+        if not np.array_equal(cols["responses"][keys], y.astype(np.int64)):
+            raise ValueError(
+                f"{dataset}: ответы по номерам строк {name} части не совпали "
+                f"с сохранёнными — номера относятся к другому файлу")
+    return (v["concepts"][valid_keys].astype(np.int64),
+            t["concepts"][test_keys].astype(np.int64),
+            v["uid"][valid_keys].astype(np.int64))

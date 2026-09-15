@@ -53,9 +53,8 @@ from pathlib import Path
 import numpy as np
 from joblib import Parallel, delayed
 
-from ktx import paths
+from ktx import deep_inputs, paths
 from ktx.bootstrap_fast import auc_metric_fast, paired_bootstrap_fast
-from ktx.concept_ids import concept_ids_for_test, concept_ids_for_valid
 from ktx.ensemble import (
     AttentionGating,
     LogisticStackedBlender,
@@ -81,59 +80,22 @@ def ece_metric(y_true, y_prob) -> float:
     return ece_equal_mass(y_true, y_prob, n_bins=15)
 
 
-def _load_deep(dataset: str, model: str, fold: int):
-    p = PRED / dataset / f"{model}_fold{fold}.npz"
-    if not p.exists():
-        return None
-    d = np.load(p)
-    need = {"valid_y_true", "valid_y_prob", "concept_y_true", "concept_y_prob"}
-    if not need <= set(d.files):
-        return None
-    groups = (d["concept_groups"]
-              if "concept_groups" in d.files and d["concept_groups"].size > 0 else None)
-    return (d["valid_y_true"].astype(int), d["valid_y_prob"].astype(np.float64),
-            d["concept_y_true"].astype(int), d["concept_y_prob"].astype(np.float64),
-            groups)
-
-
-def _stack_deep(dataset: str, fold: int):
-    v_ref = t_ref = groups = None
-    v_cols, t_cols, kept = [], [], []
-    for m in DEEP_MODELS:
-        got = _load_deep(dataset, m, fold)
-        if got is None:
-            continue
-        vy, vp, ty, tp, g = got
-        if v_ref is None:
-            v_ref, t_ref, groups = vy, ty, g
-        elif not np.array_equal(vy, v_ref) or not np.array_equal(ty, t_ref):
-            return None
-        v_cols.append(vp)
-        t_cols.append(tp)
-        kept.append(m)
-    if len(kept) < 2:
-        return None
-    return (v_ref, np.column_stack(v_cols), t_ref, np.column_stack(t_cols), groups, kept)
-
-
 def _argbest(y, matrix, models) -> int:
     """Лучшая одиночная модель. При равенстве — по имени, чтобы выбор был воспроизводим."""
     aucs = [auc_metric(y, matrix[:, j]) for j in range(matrix.shape[1])]
     return sorted(range(len(models)), key=lambda j: (-aucs[j], models[j]))[0]
 
 
-def bootstrap_cell(dataset: str, fold: int, n_boot: int, seed: int) -> list[dict]:
-    st = _stack_deep(dataset, fold)
-    if st is None:
-        return []
-    vy, vmatrix, ty, tmatrix, groups, kept = st
+def bootstrap_cell(dataset: str, fold: int, n_boot: int, seed: int, granularity: str = "concept") -> list[dict]:
     try:
-        vconc = concept_ids_for_valid(dataset, valid_fold=fold)
-        tconc = concept_ids_for_test(dataset)
+        cell = deep_inputs.load_cell(dataset, fold, DEEP_MODELS, granularity)
     except FileNotFoundError:
         return []
-    if vconc.size != vy.size or tconc.size != ty.size:
+    if cell is None:
         return []
+    vy, vmatrix, ty, tmatrix, kept = (cell.valid_y, cell.valid_matrix,
+                                      cell.test_y, cell.test_matrix, cell.models)
+    vconc, tconc, groups = cell.valid_concepts, cell.test_concepts, cell.groups
 
     # Точка отсчёта выбирается по валидационной части: выбор по тестовой был бы
     # максимумом нескольких шумных оценок и завышал бы её систематически.
@@ -174,6 +136,7 @@ def bootstrap_cell(dataset: str, fold: int, n_boot: int, seed: int) -> list[dict
         rows.append({
             "dataset": dataset,
             "fold": fold,
+            "granularity": granularity,
             "scheme": scheme,
             "best_single_model": kept[j_best],
             "best_single_selected_on": "valid",
@@ -243,23 +206,26 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--datasets", nargs="+", default=DATASETS)
     ap.add_argument("--folds", nargs="+", type=int, default=FOLDS)
+    ap.add_argument("--granularity", choices=["concept", "question"], default="concept",
+                    help="уровень подробности строки: пара «задание, компонент» или задание")
     ap.add_argument("--n-boot", type=int, default=2000)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--n-jobs", type=int, default=-1)
-    ap.add_argument("--out", type=Path,
-                    default=paths.ARTIFACTS_DIR / "ensembles"
-                    / "cluster_bootstrap_attention_moe.csv")
-    ap.add_argument("--pooled-out", type=Path,
-                    default=paths.ARTIFACTS_DIR / "ensembles"
-                    / "cluster_bootstrap_attention_moe_pooled.csv")
+    ap.add_argument("--out", type=Path, default=None)
+    ap.add_argument("--pooled-out", type=Path, default=None)
     args = ap.parse_args()
+    suffix = "" if args.granularity == "concept" else "_question"
+    if args.out is None:
+        args.out = paths.ARTIFACTS_DIR / "ensembles" / f"cluster_bootstrap_attention_moe{suffix}.csv"
+    if args.pooled_out is None:
+        args.pooled_out = paths.ARTIFACTS_DIR / "ensembles" / f"cluster_bootstrap_attention_moe{suffix}_pooled.csv"
 
     t0 = time.time()
     cells = [(ds, fold) for ds in args.datasets for fold in args.folds]
 
     def _run(ds, fold):
         t_cell = time.time()
-        return ds, fold, bootstrap_cell(ds, fold, args.n_boot, args.seed), time.time() - t_cell
+        return ds, fold, bootstrap_cell(ds, fold, args.n_boot, args.seed, args.granularity), time.time() - t_cell
 
     results = Parallel(n_jobs=args.n_jobs, backend="loky", verbose=10)(
         delayed(_run)(*c) for c in cells)

@@ -18,9 +18,9 @@ per-concept-row identifier assigned by pyKT preprocessing; the leading
 cidx of a question-event picks out that event from either walk.
 
 Deep-side ``cidxs`` are obtained from the ``test_cidxs`` field written
-to each deep NPZ by ``research/scripts/run_dl_matrix.py`` after the
-2026-08-16 pyKT patch (see ``docs/README_cross_family_alignment.md`` or
-``notes/16_ensembles_kickoff.md`` §12 for the four required patches).
+to each deep NPZ by the deep-matrix runner after the 2026-08-16 pyKT
+preprocessing patch that passes ``cidxs`` through to the question-level
+sequence files.
 Classical-side ``cidxs`` are trivially reconstructed from the ``cidxs``
 column of ``test.csv``.
 
@@ -145,9 +145,7 @@ def _deep_cidxs_and_labels(dataset: str, model: str = "dkt", fold: int = 0
         raise RuntimeError(
             f"deep NPZ {npz_path.name} has no test_cidxs field. "
             f"Cross-family alignment requires re-running the deep matrix "
-            f"with the cidxs-aware pyKT patch — see notes/16_ensembles_kickoff.md "
-            f"§12 for the four required patches plus the Kaggle GPU rerun "
-            f"command."
+            f"with the cidxs-aware pyKT preprocessing patch."
         )
     return (np.asarray(d["test_cidxs"], dtype=np.int64),
             np.asarray(d["y_true"], dtype=np.int8))

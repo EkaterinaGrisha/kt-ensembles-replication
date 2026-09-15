@@ -3,8 +3,8 @@
 The reference implementation in ``stats.paired_bootstrap`` scales poorly on
 the largest KT test sets — a single 2000-iteration cluster-bootstrap on
 bridge2algebra2006 (354K rows) took multiple hours per aggregator × metric
-combination, driving the full ``cluster_bootstrap_simple_ensembles.py`` run
-into the multi-day range. Root causes and fixes:
+combination, driving a full matrix-wide bootstrap run into the multi-day
+range. Root causes and fixes:
 
 1. **Inner Python loop over students** (``np.concatenate([members[g] for g in
    pick])``). Fixed: pyKT test NPZs always have contiguous per-student blocks
@@ -27,14 +27,14 @@ Public surface (API-compatible with ``stats.paired_bootstrap``):
   returns a ``stats.ComparisonResult``. Cluster-bootstrap kicks in whenever
   ``groups`` is provided.
 
-Fidelity note. The seed is honored, but the RNG *stream* differs from
-``stats.paired_bootstrap`` because we draw one ``np.random.integers`` batch
-for the whole bootstrap up front (versus one draw per iteration in the
-reference). The bootstrap CI + p-value distributions are statistically
-equivalent (Efron 1979 asymptotics); the numeric values differ at the
-Monte-Carlo noise floor. Bit-for-bit reproduction would require matching
-the exact call sequence to the RNG — not worth the code complexity given
-the equivalence.
+Fidelity note. The seed is honored and the resamples drawn are the same as
+``stats.paired_bootstrap`` draws: batching the ``np.random.integers`` calls
+into one up-front draw does not change which students land in which
+replicate. What remains is summation order, so paired values agree to
+floating-point rounding — at most ~1e-16 on the metric values and interval
+bounds, with the difference and the p-value usually identical bit for bit.
+This is machine epsilon, not the Monte-Carlo noise floor: two genuinely
+different resampling streams would disagree around 1e-3 at B = 2000.
 """
 from __future__ import annotations
 
@@ -174,9 +174,15 @@ def paired_bootstrap_fast(
 
     lo = float(np.quantile(diffs, alpha / 2))
     hi = float(np.quantile(diffs, 1 - alpha / 2))
-    frac_le0 = float(np.mean(diffs <= 0))
-    frac_ge0 = float(np.mean(diffs >= 0))
-    p = float(min(1.0, 2.0 * min(frac_le0, frac_ge0)))
+    # Двусторонняя достигаемая значимость считается так же, как в
+    # ``stats.paired_bootstrap``: счётчик сдвинут на единицу, знаменатель — ещё
+    # на одну (Davison & Hinkley, §4.2). Ноль здесь невозможен: сама выборка —
+    # одна из возможных пересборок, и «0.000» обещало бы уверенность, которой у
+    # процедуры нет. Нижняя граница 2 / (B + 1) — то разрешение, которое
+    # покупает число пересборок.
+    n_le0 = int(np.sum(diffs <= 0))
+    n_ge0 = int(np.sum(diffs >= 0))
+    p = float(min(1.0, 2.0 * (min(n_le0, n_ge0) + 1) / (diffs.size + 1)))
     return ComparisonResult(
         metric=metric_name,
         value_a=float(metric_fn(y, a)), value_b=float(metric_fn(y, b)),

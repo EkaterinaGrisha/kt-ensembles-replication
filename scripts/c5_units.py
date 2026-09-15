@@ -22,8 +22,7 @@ Conversion keeps every significant digit: a percent quoted to d decimals becomes
 fraction quoted to d + 2, so -0.007 % becomes -0.00007 and nothing is rounded away.
 
 Usage:
-  python -m scripts.c5_units --report research/paper/rq3_draft_ru.md
-  python -m scripts.c5_units --check research/paper/c5_ensembles_ru.md
+  python -m scripts.c5_units --check paper/c5_ensembles_ru.md
 """
 from __future__ import annotations
 

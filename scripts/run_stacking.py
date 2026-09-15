@@ -18,7 +18,7 @@ block for the reason.
 
 Outputs
 -------
-``artifacts/ensembles/stacking_logistic.csv`` — one row per
+``artifacts/ensembles/stacking_all_v4.csv`` — one row per
 (dataset, fold, subset). Columns:
 
     dataset, fold, subset, models_in_subset,
@@ -115,7 +115,7 @@ def _load_deep(dataset: str, model: str, fold: int,
         late_mean aggregation over concept_y_prob emitted by
         aggregate_deep_valid_to_question.py. Inherits pyKT concept-
         unrolling teacher-forcing leakage on ``is_repeat=1`` positions
-        (see notes/24_t1a_leakage_finding.md); kept as default for
+        kept as default for
         reproducibility of the earlier stacking tables.
     """
     p = DEEP_ROOT / dataset / f"{model}_fold{fold}.npz"

@@ -45,8 +45,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ktx import paths
-from ktx.downstream import concept_ids_for_test, concept_ids_for_valid
+from ktx import deep_inputs, paths
 from ktx.ensemble import (
     CCCE,
     ArithmeticMean,
@@ -63,37 +62,6 @@ DEEP_MODELS = ["dkt", "sakt", "akt", "simplekt"]
 DEEP_ROOT = paths.ARTIFACTS_DIR / "predictions"
 
 
-def _load_deep_concept(dataset, model, fold):
-    p = DEEP_ROOT / dataset / f"{model}_fold{fold}.npz"
-    if not p.exists():
-        return None
-    d = np.load(p)
-    need = {"valid_y_true", "valid_y_prob", "concept_y_true", "concept_y_prob"}
-    if not need <= set(d.files):
-        return None
-    return (d["valid_y_true"].astype(int),  d["valid_y_prob"].astype(np.float64),
-            d["concept_y_true"].astype(int), d["concept_y_prob"].astype(np.float64))
-
-
-def _stack_deep(dataset, fold):
-    v_y_ref = t_y_ref = None
-    v_cols, t_cols, kept = [], [], []
-    for m in DEEP_MODELS:
-        got = _load_deep_concept(dataset, m, fold)
-        if got is None:
-            continue
-        vy, vp, ty, tp = got
-        if v_y_ref is None:
-            v_y_ref, t_y_ref = vy, ty
-        else:
-            if not np.array_equal(vy, v_y_ref) or not np.array_equal(ty, t_y_ref):
-                return None
-        v_cols.append(vp); t_cols.append(tp); kept.append(m)
-    if len(kept) < 2:
-        return None
-    return v_y_ref, np.column_stack(v_cols), t_y_ref, np.column_stack(t_cols), kept
-
-
 def _metrics(y, p, n_bins=15):
     return {
         "auc": auc_metric(y, p),
@@ -102,19 +70,18 @@ def _metrics(y, p, n_bins=15):
     }
 
 
-def process_cell(dataset, fold, cross_fit: int = 0):
-    st = _stack_deep(dataset, fold)
-    if st is None:
-        return None
-    vy, vmatrix, ty, tmatrix, kept = st
+def process_cell(dataset, fold, cross_fit: int = 0, granularity: str = "concept"):
     try:
-        vconc = concept_ids_for_valid(dataset, valid_fold=fold)
-        tconc = concept_ids_for_test(dataset)
+        cell = deep_inputs.load_cell(dataset, fold, DEEP_MODELS, granularity)
     except FileNotFoundError as e:
         print(f"  [skip] {dataset} f{fold}: concept-id lookup missing ({e})")
         return None
-    if vconc.size != vy.size or tconc.size != ty.size:
+    if cell is None:
         return None
+    vy, vmatrix, ty, tmatrix, kept = (cell.valid_y, cell.valid_matrix,
+                                      cell.test_y, cell.test_matrix, cell.models)
+    vconc, tconc = cell.valid_concepts, cell.test_concepts
+    vstud = cell.valid_students
 
     # Baselines
     mean_pred = ArithmeticMean().predict(tmatrix)
@@ -151,9 +118,11 @@ def process_cell(dataset, fold, cross_fit: int = 0):
         "no_s3":      CCCE(n_min=30, pre_cal="concept", post_cal=False, cross_fit=cf),
     }
     ccce_metrics = {}
+    cross_fit_unit = "row"
     for tag, ens in variants.items():
-        pred = ens.fit(vmatrix, vy, valid_concepts=vconc) \
+        pred = ens.fit(vmatrix, vy, valid_concepts=vconc, valid_groups=vstud) \
                   .predict(tmatrix, test_concepts=tconc)
+        cross_fit_unit = ens.cross_fit_unit_
         ccce_metrics[tag] = _metrics(ty, pred)
 
     m_static = _metrics(ty, static_pred)
@@ -163,6 +132,9 @@ def process_cell(dataset, fold, cross_fit: int = 0):
 
     row = {
         "dataset": dataset, "fold": fold,
+        "granularity": granularity,
+        "cross_fit": int(cross_fit),
+        "cross_fit_unit": cross_fit_unit,
         "models_in_subset": ",".join(kept),
         "best_single_model": kept[j_best],
         "best_single_selected_on": best_single_selected_on,
@@ -193,15 +165,19 @@ def main():
     ap.add_argument("--cross-fit", type=int, default=0,
                     help="K блоков для обучения первой ступени вне выборки; 0 — как было")
     ap.add_argument("--folds", nargs="+", type=int, default=FOLDS)
-    ap.add_argument("--out", type=Path,
-                    default=paths.ARTIFACTS_DIR / "ensembles" / "ccce_deep.csv")
+    ap.add_argument("--granularity", choices=["concept", "question"], default="concept",
+                    help="уровень подробности строки: пара «задание, компонент» или задание")
+    ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args()
+    if args.out is None:
+        suffix = "" if args.granularity == "concept" else "_question"
+        args.out = paths.ARTIFACTS_DIR / "ensembles" / f"ccce_deep{suffix}.csv"
     args.out.parent.mkdir(parents=True, exist_ok=True)
 
     rows = []
     for ds in args.datasets:
         for fold in args.folds:
-            r = process_cell(ds, fold, args.cross_fit)
+            r = process_cell(ds, fold, args.cross_fit, args.granularity)
             if r is None:
                 print(f"[{ds:22s} f{fold}] SKIP"); continue
             best_tag = max(("full", "no_s1", "global_s1", "no_s3"),

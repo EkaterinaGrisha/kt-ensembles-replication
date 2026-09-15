@@ -494,6 +494,6 @@ def se_shrunk_ece(y_true, y_prob, n_bins: int = 10) -> float:
     return float(ece)
 
 
-# Backward-compat alias — kept so earlier scripts (calibration_second_metric.py
-# etc.) do not break. New code should import ``se_shrunk_ece`` directly.
+# Backward-compat alias — kept so earlier scripts do not break. New code
+# should import ``se_shrunk_ece`` directly.
 debiased_ece = se_shrunk_ece

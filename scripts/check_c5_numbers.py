@@ -49,9 +49,9 @@ SUBSET = {"простые": "classical", "глубокие": "deep"}
 
 WORDS = {
     "нуля": 0, "одной": 1, "одном": 1, "двух": 2, "трёх": 3, "четырёх": 4, "пяти": 5,
-    "шести": 6, "семи": 7, "девяти": 9, "одиннадцати": 11, "тринадцати": 13,
-    "четырнадцати": 14, "пятидесяти двух": 52, "пятидесяти девяти": 59,
-    "шестидесяти пяти": 65,
+    "шести": 6, "семи": 7, "девяти": 9, "одиннадцать": 11, "одиннадцати": 11,
+    "тринадцати": 13, "четырнадцати": 14, "тридцати трёх": 33, "тридцати пяти": 35,
+    "пятидесяти двух": 52, "пятидесяти девяти": 59, "шестидесяти пяти": 65,
 }
 
 results: list[tuple[bool, str, str]] = []
@@ -143,6 +143,11 @@ def md_table(text: str, anchor: str, which: int = 0) -> list[list[str]]:
 
 
 # ------------------------------------------------------------- артефакты
+def _maybe(path):
+    """Результат, которого может ещё не быть: сверщик тогда скажет об этом сам."""
+    return pd.read_csv(path) if path.exists() else None
+
+
 def load() -> dict:
     import json
     return {
@@ -163,6 +168,10 @@ def load() -> dict:
         "gran": pd.read_csv(ENS / "deep_granularity.csv").set_index("dataset"),
         "seeds": pd.read_csv(ENS / "attention_seed_spread.csv"),
         "nmin": pd.read_csv(ENS / "gating_nmin_sensitivity.csv"),
+        "gate_q": pd.read_csv(ENS / "gating_deep_question.csv"),
+        "ccce_q": pd.read_csv(ENS / "ccce_deep_question.csv"),
+        "gate_q_boot": _maybe(ENS / "cluster_bootstrap_gating_question.csv"),
+        "ccce_q_boot": _maybe(ENS / "cluster_bootstrap_ccce_question.csv"),
         "attn_mps": pd.read_csv(ENS / "attention_gating_deep.csv"),
         "moe_mps": pd.read_csv(ENS / "moe_deep.csv"),
         "multi": {ds: float((np.load(ENS / "classical_concepts" / f"{ds}.npz")
@@ -426,17 +435,74 @@ def check_table10(text: str, a: dict) -> None:
                       f"в тексте {m.group(2)}, в артефакте {sig}")
 
 
-def check_crossfit(text: str, a: dict) -> None:
-    """Третий блок таблицы 9: первая ступень обучена вне блока."""
-    rows = md_table(text, "То же против взвешивания, когда первая и третья ступени")
-    check(len(rows) == 7, "кросс-фит / число строк", f"строк {len(rows)}")
-    cf = a["ccce_cf"]
+def check_question_tables(text: str, a: dict) -> None:
+    """Таблицы 12 и 13: те же измерения на строках-заданиях, шесть наборов."""
+    gq, cq = a.get("gate_q_boot"), a.get("ccce_q_boot")
+    if gq is None or cq is None:
+        check(False, "Т12/Т13 / бутстрап уровня заданий", "артефактов нет")
+        return
+    if ("auc_p_vs_best_reject_holm" not in gq.columns
+            or "auc_p_vs_static_reject_holm" not in cq.columns):
+        check(False, "Т12/Т13 / поправка Холма",
+              "в бутстрапе уровня заданий нет колонок Холма — не запускался "
+              "add_holm_to_bootstraps")
+        return
+    rows = md_table(text, "**Табл. 12.**")
+    check(len(rows) == 6, "Т12 / число строк", f"строк {len(rows)}")
+    for r in rows:
+        ds = BACK.get(r[0])
+        for j, gate in enumerate(GATES, start=1):
+            exp = mean_of(a["gate_q"], {"dataset": ds, "meta_learner": gate},
+                          "lift_gated_vs_best_auc")
+            m = re.fullmatch(r"([−+]\d+\.\d+) \((\d)\)", r[j])
+            if not m:
+                check(False, f"Т12 {r[0]}/{gate}", f"не разобрана ячейка {r[j]!r}")
+                continue
+            check(matches(m.group(1), exp), f"Т12 {r[0]}/{gate}",
+                  f"в тексте {m.group(1)!r}, в артефакте {exp:.6f}")
+            n = sig_of(gq, {"dataset": ds, "meta_learner": gate},
+                       "auc_p_vs_best_reject_holm")
+            check(int(m.group(2)) == n, f"Т12 {r[0]}/{gate} / значимость",
+                  f"в тексте {m.group(2)}, в артефакте {n}")
+    rows = md_table(text, "**Табл. 13.**")
+    check(len(rows) == 6, "Т13 / число строк", f"строк {len(rows)}")
     for r in rows:
         ds = BACK.get(r[0])
         for j, v in enumerate(VARIANTS, start=1):
-            exp = mean_of(cf, {"dataset": ds}, f"lift_{v}_vs_static_auc")
-            check(matches(r[j], exp), f"кросс-фит {r[0]}/{v}",
-                  f"в тексте {r[j]!r}, в артефакте {exp:.6f}")
+            exp = mean_of(a["ccce_q"], {"dataset": ds}, f"lift_{v}_vs_static_auc")
+            m = re.fullmatch(r"([−+]\d+\.\d+) \((\d)\)", r[j])
+            if not m:
+                check(False, f"Т13 {r[0]}/{v}", f"не разобрана ячейка {r[j]!r}")
+                continue
+            check(matches(m.group(1), exp), f"Т13 {r[0]}/{v}",
+                  f"в тексте {m.group(1)!r}, в артефакте {exp:.6f}")
+            n = sig_of(cq, {"dataset": ds, "variant": v},
+                       "auc_p_vs_static_reject_holm")
+            check(int(m.group(2)) == n, f"Т13 {r[0]}/{v} / значимость",
+                  f"в тексте {m.group(2)}, в артефакте {n}")
+
+
+def check_crossfit(text: str, a: dict) -> None:
+    """Таблица 11: первая и третья ступени обучены вне блока."""
+    cf = a["ccce_cf"]
+    check(set(cf.get("cross_fit_unit", [])) == {"student"},
+          "кросс-фит / деление по учащимся",
+          f"в артефакте {sorted(set(cf.get('cross_fit_unit', [])))}")
+    check(set(cf.get("cross_fit", [])) == {5}, "кросс-фит / число блоков",
+          f"в артефакте {sorted(set(cf.get('cross_fit', [])))}")
+    for which, metric in ((0, "auc"), (1, "brier")):
+        rows = md_table(text, "**Табл. 11.**", which)
+        check(len(rows) == 7, f"кросс-фит / число строк / {metric}", f"строк {len(rows)}")
+        for r in rows:
+            ds = BACK.get(r[0])
+            for j, v in enumerate(VARIANTS, start=1):
+                if metric == "auc":
+                    exp = mean_of(cf, {"dataset": ds}, f"lift_{v}_vs_static_auc")
+                else:
+                    d = cf[cf.dataset == ds]
+                    exp = float((d[f"ccce_{v}_brier"] - d["static_brier"]).mean())
+                check(matches(r[j], exp), f"кросс-фит {r[0]}/{v}/{metric}",
+                      f"в тексте {r[j]!r}, в артефакте {exp:.6f}")
 
 
 # ------------------------------------------------------------------ проза
@@ -578,6 +644,22 @@ def check_prose(text: str, a: dict) -> None:
         "dataset").lift_gated_vs_stack_auc.mean()
     claim(s, "5.3 против надстройки, худший набор",
           r"проигрыш (−\d+\.\d+) значим", gd.min())
+    # Счётчики значимости в прозе. Их сверщик не ловил числовыми шаблонами, и
+    # именно в них разошлись с таблицами два утверждения раздела.
+    worst = gd.idxmin()
+    b = a["gate_boot"]["deep"]
+    b = b[(b.dataset == worst) & (b.meta_learner == "static_concept_weights")]
+    word_claim(s, "5.3 против надстройки, значимых разбиений",
+               r"проигрыш −\d+\.\d+ значим на (\S+) разбиениях из пяти",
+               int(b.auc_p_vs_stack_reject_holm.sum()))
+    for key, name, pattern in (
+            ("classical", "простые", r"у простых моделей на всех (\S+) наборах"),
+            ("deep", "глубокие", r"у глубоких — на (\S+) из семи")):
+        bb = a["gate_boot"][key]
+        bb = bb[bb.meta_learner == "global_stack_concept_intercept"]
+        n55 = int((bb.groupby("dataset").auc_p_vs_best_reject_holm.sum() == 5).sum())
+        word_claim(s, f"5.3 свободный член против лучшей, наборов 5/5, {name}",
+                   pattern, n55)
 
     nm = a["nmin"]
     for key, name, pats in (
@@ -713,6 +795,18 @@ def check_prose(text: str, a: dict) -> None:
     claim(s, "5.5 без первой против лучшей максимум",
           r"без первой ступени: от −\d+\.\d+ до \+(\d+\.\d+)", bs.no_s1.max())
 
+    # счётчики значимости контролей: величины ничтожны, а значимость разная
+    cb = a["ccce_boot"]
+    for v, name, pat in (
+            ("no_s1", "без первой ступени",
+             r"помечена как значимая в (\S+ \S+) ячейках из"),
+            ("global_s1", "общая первая ступень",
+             r"значимых ячеек (\S+) из тридцати пяти")):
+        n = int(cb[cb.variant == v].auc_p_vs_static_reject_holm.sum())
+        word_claim(s, f"5.5 значимых ячеек, {name}", pat, n)
+    word_claim(s, "5.5 всего ячеек контроля", r"ячейках из (\S+ \S+), и это тот случай",
+               int((cb.variant == "no_s1").sum()))
+
     # кросс-фит первой ступени
     s55 = norm(section(text, "5.5 Трёхступенчатый ансамбль"))
     cf = a["ccce_cf"].groupby("dataset")[
@@ -733,6 +827,24 @@ def check_prose(text: str, a: dict) -> None:
           r"и от (−\d+\.\d+) до \+\d+\.\d+", cf.global_s1.min())
     claim(s55, "5.5 кросс-фит, общая ступень, максимум",
           r"и от −\d+\.\d+ до \+(\d+\.\d+)", cf.global_s1.max())
+    # Брайер под кросс-фитом: правильная функция потерь даёт тот же ответ
+    cfb = a["ccce_cf"]
+    br = pd.DataFrame({"dataset": cfb.dataset})
+    for v in VARIANTS:
+        br[v] = cfb[f"ccce_{v}_brier"] - cfb["static_brier"]
+    br = br.groupby("dataset")[VARIANTS].mean()
+    check(int((br.full > 0).sum()) == len(br), "5.5 Брайер, хуже на всех наборах",
+          f"хуже на {int((br.full > 0).sum())} из {len(br)}")
+    claim(s55, "5.5 Брайер, минимум", r"на всех семи наборах, от \+(\d+\.\d+) до", br.full.min())
+    claim(s55, "5.5 Брайер, максимум", r"наборах, от \+\d+\.\d+ до \+(\d+\.\d+)", br.full.max())
+    claim(s55, "5.5 Брайер, без первой ступени, минимум",
+          r"нуле: от (−\d+\.\d+) до \+\d+\.\d+ без первой", br.no_s1.min())
+    claim(s55, "5.5 Брайер, без первой ступени, максимум",
+          r"нуле: от −\d+\.\d+ до \+(\d+\.\d+) без первой", br.no_s1.max())
+    claim(s55, "5.5 Брайер, общая ступень, минимум",
+          r"и от (−\d+\.\d+) до \+\d+\.\d+ с общей калибровкой", br.global_s1.min())
+    claim(s55, "5.5 Брайер, общая ступень, максимум",
+          r"и от −\d+\.\d+ до \+(\d+\.\d+) с общей калибровкой", br.global_s1.max())
 
     # уровень подробности
     gr = a["gran"]
@@ -745,6 +857,75 @@ def check_prose(text: str, a: dict) -> None:
             (r"поднимается с \d+\.\d+ до (\d+\.\d+)",
              gr.loc["ednet", "auc_best_concept"])):
         claim(s23, f"2.3 уровень подробности {pat[:24]}", pat, float(val))
+
+    # --- 5.7: то же на строках-заданиях ---
+    sq = norm(section(text, "5.7 Те же измерения на уровне заданий"))
+    gq = a["gate_q"].groupby(["dataset", "meta_learner"])
+    q_best = gq.lift_gated_vs_best_auc.mean().unstack()
+    q_stack = gq.lift_gated_vs_stack_auc.mean().unstack()
+    c_best = (gate["deep"].groupby(["dataset", "meta_learner"])
+              .lift_gated_vs_best_auc.mean().unstack())
+    SCW, GSCI = "static_concept_weights", "global_stack_concept_intercept"
+    for pat, val in (
+            (r"на Algebra-2005\s*\+(\d+\.\d+) против \+\d+\.\d+", q_best.loc["algebra2005", SCW]),
+            (r"на Algebra-2005\s*\+\d+\.\d+ против \+(\d+\.\d+)", c_best.loc["algebra2005", SCW]),
+            (r"на EdNet-KT1-5k \+(\d+\.\d+) против", q_best.loc["ednet", SCW]),
+            (r"на EdNet-KT1-5k \+\d+\.\d+ против (−\d+\.\d+)", c_best.loc["ednet", SCW]),
+            (r"медианно на \+(\d+\.\d+), тогда как на", q_stack[SCW].median())):
+        claim(sq, f"5.7 {pat[:30]}", pat, float(val))
+    check(int((q_best[SCW] > 0).sum()) == len(q_best), "5.7 взвешивание положительно всюду",
+          f"положительно на {int((q_best[SCW] > 0).sum())} из {len(q_best)}")
+    check(int((q_stack[SCW] > 0).sum()) == len(q_stack),
+          "5.7 взвешивание против надстройки положительно всюду",
+          f"положительно на {int((q_stack[SCW] > 0).sum())} из {len(q_stack)}")
+    gap = (q_best[SCW] - q_best[GSCI]).sort_values()
+    small = gap.drop(["algebra2005", "ednet"])
+    word_claim(sq, "5.7 малый разрыв, число наборов",
+               r"На (\S+) наборах из шести разрыв", len(small))
+    claim(sq, "5.7 малый разрыв, минимум",
+          r"ничтожен — от (−\d+\.\d+) до \+\d+\.\d+", small.min())
+    claim(sq, "5.7 малый разрыв, максимум",
+          r"ничтожен — от −\d+\.\d+ до \+(\d+\.\d+)", small.max())
+    claim(sq, "5.7 разрыв Algebra", r"он равен \+(\d+\.\d+)", gap["algebra2005"])
+    claim(sq, "5.7 разрыв EdNet", r"а на EdNet-KT1-5k \+(\d+\.\d+), то есть", gap["ednet"])
+    cq = a["ccce_q"].groupby("dataset")[[f"lift_{v}_vs_static_auc" for v in VARIANTS]].mean()
+    cq.columns = VARIANTS
+    neg = cq.full[cq.full < 0]
+    word_claim(sq, "5.7 три ступени, отрицательных наборов",
+               r"На (\S+) наборах из шести разность отрицательна", len(neg))
+    claim(sq, "5.7 три ступени, минимум потери", r"отрицательна, от (−\d+\.\d+) до −\d+\.\d+",
+          neg.max())
+    claim(sq, "5.7 три ступени, максимум потери", r"отрицательна, от −\d+\.\d+ до (−\d+\.\d+)",
+          neg.min())
+    claim(sq, "5.7 три ступени, EdNet", r"там схема выигрывает\s*\+(\d+\.\d+)", cq.full["ednet"])
+    claim(sq, "5.7 без первой ступени, минимум", r"на (−\d+\.\d+)…−\d+\.\d+", cq.no_s1.min())
+    claim(sq, "5.7 без первой ступени, максимум", r"на −\d+\.\d+…(−\d+\.\d+)", cq.no_s1.max())
+    claim(sq, "5.7 общая первая ступень, минимум",
+          r"на первой ступени — на (−\d+\.\d+)…\+\d+\.\d+", cq.global_s1.min())
+    claim(sq, "5.7 общая первая ступень, максимум",
+          r"на первой ступени — на −\d+\.\d+…\+(\d+\.\d+)", cq.global_s1.max())
+    claim(sq, "5.7 EdNet площадь без разворота", r"модели там всего (\d+\.\d+)",
+          float(a["gran"].loc["ednet", "auc_best_question"]))
+    # проверка прошивки: там, где разворота нет, два уровня обязаны совпасть
+    k = ["dataset", "fold", "meta_learner"]
+    both = (a["gate_q"][k + ["lift_gated_vs_best_auc"]]
+            .merge(gate["deep"][k + ["lift_gated_vs_best_auc"]], on=k,
+                   suffixes=("_q", "_c")))
+    gap = (both.lift_gated_vs_best_auc_q - both.lift_gated_vs_best_auc_c).abs()
+    by_ds = gap.groupby(both.dataset).max()
+    claim(sq, "5.7 совпадение уровней, наборы без разворота",
+          r"наибольшее расхождение по всем ячейкам (\d+\.\d+)",
+          float(by_ds[["assist2012", "assist2017"]].max()))
+    claim(sq, "5.7 совпадение уровней, Bridge",
+          r"расхождение не\s*превышает (\d+\.\d+)", float(by_ds["bridge2algebra2006"]))
+    claim(sq, "5.7 расхождение при большом развороте",
+          r"расхождение доходит до (\d+\.\d+)", float(by_ds.max()))
+    claim(sq, "5.7 разворот Bridge", r"строк становится больше на (\d+\.\d+) %",
+          (float(a["gran"].loc["bridge2algebra2006", "expansion"]) - 1) * 100)
+    q_sets = set(a["gate_q"].dataset) | set(a["ccce_q"].dataset)
+    check("assist2015" not in q_sets, "5.7 ASSISTments-2015 исключён",
+          f"в артефактах наборов {len(q_sets)}")
+    check(len(q_sets) == 6, "5.7 шесть наборов", f"в артефактах {len(q_sets)}")
 
     s = norm(section(text, "5.6 Калибровка"))
     ge = gate["deep"][gate["deep"].meta_learner == "static_concept_weights"]
@@ -920,11 +1101,67 @@ def check_hygiene(text: str) -> None:
     check(not bad, "гигиена / проценты AUC", f"найдено {bad}")
 
 
+def clustered(a: dict) -> None:
+    """Каждый бутстрап обязан перевыбирать учащихся, а не строки.
+
+    Раздел 4.2 обещает кластерный бутстрап по учащимся. Реализация молча
+    откатывается на перевыбор строк, когда учащиеся у ячейки недоступны, —
+    и тогда интервалы выходят уже, чем есть, а разности кажутся значимее.
+    Отличить один случай от другого по таблице нельзя, поэтому проверяется
+    сам артефакт: `n_students` равен −1 ровно там, где отката не было.
+    """
+    for name, df in (("усреднение", a["simple"]), ("надстройка", a["stack"]),
+                     ("взвешивание, глубокие", a["gate_boot"]["deep"]),
+                     ("взвешивание, простые", a["gate_boot"]["classical"]),
+                     ("внимание и смесь", a["attn_moe"]),
+                     ("три ступени", a["ccce_boot"]),
+                     ("взвешивание, задания", a.get("gate_q_boot")),
+                     ("три ступени, задания", a.get("ccce_q_boot"))):
+        if df is None or "n_students" not in df.columns:
+            continue
+        bad = int((df.n_students <= 0).sum())
+        check(bad == 0, f"кластерный бутстрап: {name}",
+              f"строк с перевыбором строк вместо учащихся: {bad} из {len(df)}")
+
+
+def holm_ready(a: dict) -> bool:
+    """Все ли бутстрапы прошли поправку Холма.
+
+    Счётчики значимости во всех таблицах берутся из колонок `*_reject_holm`,
+    которые дописывает `add_holm_to_bootstraps`. Свежепересчитанный бутстрап их
+    ещё не несёт, и без этой проверки сверщик падал бы с обрывом стека вместо
+    внятного «запустите поправку».
+    """
+    missing = []
+    for name, df in (("simple", a["simple"]), ("stack", a["stack"]),
+                     ("gating deep", a["gate_boot"]["deep"]),
+                     ("gating simple", a["gate_boot"]["classical"]),
+                     ("attention/moe", a["attn_moe"]), ("ccce", a["ccce_boot"]),
+                     ("gating question", a.get("gate_q_boot")),
+                     ("ccce question", a.get("ccce_q_boot"))):
+        if df is None:
+            continue
+        if not any(c.endswith("_reject_holm") or c == "reject_holm" for c in df.columns):
+            missing.append(name)
+    if missing:
+        check(False, "поправка Холма",
+              f"колонок нет в бутстрапах: {', '.join(missing)}; "
+              f"запустите add_holm_to_bootstraps")
+        return False
+    return True
+
+
 def main() -> int:
     # путь можно передать аргументом: так проверяется намеренно испорченная копия
     path = Path(sys.argv[1]) if len(sys.argv) > 1 else None
     text = manuscript(path)
     a = load()
+    if not holm_ready(a):
+        print("ПЛОХО  поправка Холма: бутстрапы без колонок Холма — "
+              "проверка таблиц не запускалась")
+        print(f"\nпроверок {len(results)}, не прошло 1")
+        return 1
+    clustered(a)
     check_table1(text, a)
     check_components(text, a, "**Табл. 2.**", "classical",
                      ["bkt", "pfa", "pfa_recency", "elorasch"])
@@ -938,6 +1175,7 @@ def main() -> int:
     check_table9(text, a)
     check_table10(text, a)
     check_crossfit(text, a)
+    check_question_tables(text, a)
     check_prose(text, a)
     check_abstracts(text, a)
     check_citations(text)

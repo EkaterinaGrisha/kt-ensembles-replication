@@ -24,7 +24,7 @@
 
 Запуск:
   python -m scripts.make_c5_tables
-  python -m scripts.make_c5_tables --into research/paper/c5_ensembles_ru.md
+  python -m scripts.make_c5_tables --into paper/c5_ensembles_ru.md
 """
 from __future__ import annotations
 
@@ -58,6 +58,14 @@ MOE_MPS = ENS / "moe_deep.csv"
 CCCE = ENS / "ccce_deep.csv"
 CCCE_CF = ENS / "ccce_crossfit_deep.csv"   # первая ступень обучена вне блока
 CCCE_BOOT = ENS / "cluster_bootstrap_ccce.csv"
+# То же на уровне заданий: строка — задание, а не пара «задание, компонент».
+GATING_Q = ENS / "gating_deep_question.csv"
+GATING_Q_BOOT = ENS / "cluster_bootstrap_gating_question.csv"
+CCCE_Q = ENS / "ccce_deep_question.csv"
+CCCE_Q_BOOT = ENS / "cluster_bootstrap_ccce_question.csv"
+# Шесть наборов: у ASSISTments-2015 нет идентификаторов заданий.
+ORDER_Q = ["algebra2005", "assist2009", "assist2012",
+           "assist2017", "bridge2algebra2006", "ednet"]
 
 ORDER = ["algebra2005", "assist2009", "assist2012", "assist2015",
          "assist2017", "bridge2algebra2006", "ednet"]
@@ -109,8 +117,20 @@ def load(path) -> pd.DataFrame:
     return pd.read_csv(path)
 
 
+def load_if_ready(*paths) -> list[pd.DataFrame] | None:
+    """Результаты, которых может ещё не быть: таблица тогда не собирается."""
+    missing = [p for p in paths if not p.exists()]
+    if missing:
+        print(f"  нет ещё: {', '.join(p.name for p in missing)} — таблица пропущена")
+        return None
+    return [pd.read_csv(p) for p in paths]
+
+
 def sig_counts(boot: pd.DataFrame, keys: list[str], column: str) -> pd.Series:
     """Сколько разбиений из скольких отвергают нулевую гипотезу после поправки Холма."""
+    if column not in boot.columns:
+        sys.exit(f"ФАТАЛЬНО: в бутстрапе нет колонки {column} — поправка Холма "
+                 f"не применялась; запустите add_holm_to_bootstraps")
     grouped = boot.groupby(keys)[column]
     return grouped.sum().astype(int).astype(str) + "/" + grouped.count().astype(str)
 
@@ -344,18 +364,81 @@ def table_ccce(points: pd.DataFrame, boot: pd.DataFrame, number: int,
                 row.append(f"{frac(delta.loc[ds, v]) + ' (' + n + ')':>{width}}")
             out.append(f"| {DISPLAY[ds]:<{W}} | " + " | ".join(row) + " |")
 
-    if crossfit is not None:
-        cols = {v: f"lift_{v}_vs_static_auc" for v in VARIANTS}
-        delta = crossfit.groupby("dataset")[list(cols.values())].mean()
+    return "\n".join(out)
+
+
+def table_crossfit(crossfit: pd.DataFrame, number: int) -> str:
+    """Первая и третья ступени обучены вне блока: площадь под кривой и Брайер."""
+    unit = set(crossfit.get("cross_fit_unit", pd.Series(["row"])))
+    blocks = sorted(set(crossfit.get("cross_fit", pd.Series([0]))))
+    cols = ["полная", "без ст. 1", "общая ст. 1", "без ст. 3"]
+    width = max(len(c) for c in cols) + 3
+    out = [f"Табл. {number}. Трёхступенчатый ансамбль, когда первая и третья ступени "
+           f"обучены вне блока: разность относительно взвешивания по компонентам знания, "
+           f"среднее по пяти разбиениям. Валидационная часть делится на "
+           f"{blocks[-1]} блоков по учащимся, и каждый блок калибруется кривыми, "
+           f"построенными по остальным. Сверху — площадь под кривой, снизу — мера "
+           f"Брайера, у которой положительное значение означает, что схема хуже. "
+           f"Отдельным бутстрапом этот прогон не проверялся.", ""]
+    for metric, title in (("auc", "Площадь под кривой:"), ("brier", "Мера Брайера:")):
+        if metric == "auc":
+            delta = crossfit.groupby("dataset")[
+                [f"lift_{v}_vs_static_auc" for v in VARIANTS]].mean()
+        else:
+            tmp = pd.DataFrame({"dataset": crossfit.dataset})
+            for v in VARIANTS:
+                tmp[v] = crossfit[f"ccce_{v}_brier"] - crossfit["static_brier"]
+            delta = tmp.groupby("dataset")[VARIANTS].mean()
         delta.columns = VARIANTS
-        cells = " | ".join(f"{VARIANT_RU[v]:>{width}}" for v in VARIANTS)
-        rule = " | ".join(["-" * (width - 1) + ":"] * len(VARIANTS))
-        out += ["", "То же против взвешивания, когда первая и третья ступени обучены "
-                "вне блока (бутстрап для этого варианта не считался):", "",
-                f"| {'набор':<{W}} | {cells} |", f"| {'-' * W} | {rule} |"]
+        out += ["", title, ""] + head(cols, width)
         for ds in ORDER:
-            row = " | ".join(f"{frac(delta.loc[ds, v]):>{width}}" for v in VARIANTS)
+            row = " | ".join(f"{frac(delta.loc[ds, v], 5):>{width}}" for v in VARIANTS)
             out.append(f"| {DISPLAY[ds]:<{W}} | {row} |")
+    if unit != {"student"}:
+        sys.exit(f"ФАТАЛЬНО: кросс-фит делит валидацию по {unit}, а подпись говорит про учащихся")
+    return "\n".join(out)
+
+
+def table_question_gating(points: pd.DataFrame, boot: pd.DataFrame, number: int) -> str:
+    """Условное взвешивание на уровне заданий: те же три вентиля, шесть наборов."""
+    width = max(len(v) for v in GATE_RU.values()) + 3
+    out = [f"Табл. {number}. Условное взвешивание на строках-заданиях, семейство "
+           f"глубоких моделей: разность площади под кривой относительно лучшей одиночной "
+           f"модели, среднее по пяти разбиениям, в скобках — число разбиений со значимой "
+           f"разностью после поправки Холма. ASSISTments-2015 выпадает: у него нет "
+           f"идентификаторов заданий, и уровень заданий совпадает с уровнем пар. "
+           f"С таблицей 6 эти числа не сравниваются: там строка — пара "
+           f"«задание, компонент знания».", ""]
+    delta = points.groupby(["dataset", "meta_learner"]).lift_gated_vs_best_auc.mean()
+    sig = sig_counts(boot, ["dataset", "meta_learner"], "auc_p_vs_best_reject_holm")
+    out += head([GATE_RU[g] for g in GATES], width)
+    for ds in ORDER_Q:
+        row = []
+        for g in GATES:
+            n = sig.get((ds, g), "—/5").split("/")[0]
+            row.append(f"{frac(delta.loc[(ds, g)]) + ' (' + n + ')':>{width}}")
+        out.append(f"| {DISPLAY[ds]:<{W}} | " + " | ".join(row) + " |")
+    return "\n".join(out)
+
+
+def table_question_ccce(points: pd.DataFrame, boot: pd.DataFrame, number: int) -> str:
+    """Трёхступенчатая схема на уровне заданий, против взвешивания."""
+    width = max(len(v) for v in VARIANT_RU.values()) + 3
+    out = [f"Табл. {number}. Трёхступенчатый ансамбль на строках-заданиях, семейство "
+           f"глубоких моделей: разность площади под кривой относительно взвешивания по "
+           f"компонентам знания, среднее по пяти разбиениям, в скобках — число разбиений "
+           f"со значимой разностью после поправки Холма. ASSISTments-2015 выпадает по "
+           f"той же причине, что и в таблице 12.", ""]
+    delta = points.groupby("dataset")[[f"lift_{v}_vs_static_auc" for v in VARIANTS]].mean()
+    delta.columns = VARIANTS
+    sig = sig_counts(boot, ["dataset", "variant"], "auc_p_vs_static_reject_holm")
+    out += head([VARIANT_RU[v] for v in VARIANTS], width)
+    for ds in ORDER_Q:
+        row = []
+        for v in VARIANTS:
+            n = sig.get((ds, v), "—/5").split("/")[0]
+            row.append(f"{frac(delta.loc[ds, v]) + ' (' + n + ')':>{width}}")
+        out.append(f"| {DISPLAY[ds]:<{W}} | " + " | ".join(row) + " |")
     return "\n".join(out)
 
 
@@ -380,7 +463,10 @@ def table_calibration(simple: pd.DataFrame, stack: pd.DataFrame, gate: dict,
            f"скобках — число разбиений со значимой разностью после поправки Холма. "
            f"Отрицательное значение означает, что ансамбль калиброван лучше. Последний "
            f"столбец — трёхступенчатая схема относительно взвешивания по компонентам "
-           f"знания. Надстройка — градиентный бустинг.", ""]
+           f"знания. Надстройка — градиентный бустинг. Уровень подробности строки в "
+           f"столбцах разный: первые два посчитаны на строках-заданиях, остальные три — "
+           f"на строках-парах «задание, компонент знания» (раздел 2.3), поэтому "
+           f"сравнивать между собой можно только столбцы одного уровня.", ""]
     cells = " | ".join(f"{c:>{width}}" for c in cols)
     rule = " | ".join(["-" * (width - 1) + ":"] * len(cols))
     out += [f"| {'набор':<{W}} | {cells} |", f"| {'-' * W} | {rule} |"]
@@ -721,9 +807,14 @@ def main() -> int:
         6: table_gating(gate, gate_boot, 6),
         7: table_gating_vs_stack(gate, gate_boot, 7),
         8: table_attention(attn_moe, 8),
-        9: table_ccce(ccce, ccce_boot, 9, load(CCCE_CF)),
+        9: table_ccce(ccce, ccce_boot, 9),
         10: table_calibration(simple, stack, gate, ccce, ccce_boot, gate_boot, 10),
+        11: table_crossfit(load(CCCE_CF), 11),
     }
+    if (q := load_if_ready(GATING_Q, GATING_Q_BOOT)) is not None:
+        tables[12] = table_question_gating(q[0], q[1], 12)
+    if (q := load_if_ready(CCCE_Q, CCCE_Q_BOOT)) is not None:
+        tables[13] = table_question_ccce(q[0], q[1], 13)
     if args.into:
         n = splice(args.into, tables)
         print(f"{args.into}: подставлено таблиц {n}")

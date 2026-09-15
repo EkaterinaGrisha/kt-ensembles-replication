@@ -109,8 +109,7 @@ def _load(dataset: str, model: str, fold: int) -> tuple[np.ndarray, np.ndarray, 
 # npz; classical models keep them in a separate backfill cache. Mirrors
 # ``run_simple_ensembles._load_prediction`` field-for-field -- including the
 # preference for the leak-free ``*_q_pykt`` object over the earlier ``*_q``
-# late_mean aggregation, which carries the teacher-forcing leakage documented
-# in notes/24_t1a_leakage_finding.md.
+# late_mean aggregation, which carries a teacher-forcing leak.
 _DEEP_MODELS = set(SUBSETS["deep"])
 
 

@@ -20,7 +20,7 @@ Why within-family only (for now).
 
 Outputs
 -------
-``research/artifacts/ensembles/simple_ensembles.csv`` with columns:
+``artifacts/ensembles/simple_ensembles.csv`` with columns:
     dataset, fold, subset, models_in_subset, aggregator,
     n_rows, auc, ece, brier,
     best_single_model, best_single_auc, delta_auc,
@@ -87,7 +87,7 @@ def _load_prediction(
     # Deep valid at question level. Prefer the leak-free T1b object
     # (`valid_y_*_q_pykt`, pyKT evaluate_question on the valid loader) over the
     # earlier late_mean aggregation (`valid_y_*_q`), which carries the
-    # teacher-forcing leakage documented in notes/24_t1a_leakage_finding.md.
+    # teacher-forcing leak.
     # Cells retrained on Kaggle after 2026-08-31 only ever get the pykt fields —
     # without this preference they silently fell back to selecting best-single on
     # TEST, which is exactly the N1 defect this file was fixed for.

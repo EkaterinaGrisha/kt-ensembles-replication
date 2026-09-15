@@ -51,9 +51,8 @@ from pathlib import Path
 import numpy as np
 from joblib import Parallel, delayed
 
-from ktx import paths
+from ktx import deep_inputs, paths
 from ktx.bootstrap_fast import auc_metric_fast, paired_bootstrap_fast
-from ktx.downstream import concept_ids_for_test, concept_ids_for_valid
 from ktx.ensemble import (
     CCCE,
     LogisticStackedBlender,
@@ -81,57 +80,22 @@ def ece_metric(y_true, y_prob) -> float:
 auc_metric = auc_metric_fast
 
 
-def _load_deep(dataset, model, fold):
-    p = DEEP_ROOT / dataset / f"{model}_fold{fold}.npz"
-    if not p.exists():
-        return None
-    d = np.load(p)
-    need = {"valid_y_true", "valid_y_prob", "concept_y_true", "concept_y_prob"}
-    if not need <= set(d.files):
-        return None
-    g = d["concept_groups"] if "concept_groups" in d.files and d["concept_groups"].size > 0 else None
-    return (d["valid_y_true"].astype(int),  d["valid_y_prob"].astype(np.float64),
-            d["concept_y_true"].astype(int), d["concept_y_prob"].astype(np.float64),
-            g)
-
-
-def _stack_deep(dataset, fold):
-    v_y_ref = t_y_ref = groups = None
-    v_cols, t_cols, kept = [], [], []
-    for m in DEEP_MODELS:
-        got = _load_deep(dataset, m, fold)
-        if got is None:
-            continue
-        vy, vp, ty, tp, g = got
-        if v_y_ref is None:
-            v_y_ref, t_y_ref, groups = vy, ty, g
-        else:
-            if not np.array_equal(vy, v_y_ref) or not np.array_equal(ty, t_y_ref):
-                return None
-        v_cols.append(vp); t_cols.append(tp); kept.append(m)
-    if len(kept) < 2:
-        return None
-    return v_y_ref, np.column_stack(v_cols), t_y_ref, np.column_stack(t_cols), groups, kept
-
-
 def _best_single(y, matrix, models):
     aucs = [auc_metric(y, matrix[:, j]) for j in range(matrix.shape[1])]
     j = max(range(len(models)), key=lambda k: (aucs[k], -ord(models[k][0])))
     return j, models[j]
 
 
-def bootstrap_cell(dataset, fold, n_boot, seed):
-    st = _stack_deep(dataset, fold)
-    if st is None:
-        return []
-    vy, vmatrix, ty, tmatrix, groups, kept = st
+def bootstrap_cell(dataset, fold, n_boot, seed, granularity: str = "concept"):
     try:
-        vconc = concept_ids_for_valid(dataset, valid_fold=fold)
-        tconc = concept_ids_for_test(dataset)
+        cell = deep_inputs.load_cell(dataset, fold, DEEP_MODELS, granularity)
     except FileNotFoundError:
         return []
-    if vconc.size != vy.size or tconc.size != ty.size:
+    if cell is None:
         return []
+    vy, vmatrix, ty, tmatrix, kept = (cell.valid_y, cell.valid_matrix,
+                                      cell.test_y, cell.test_matrix, cell.models)
+    vconc, tconc, groups = cell.valid_concepts, cell.test_concepts, cell.groups
 
     # The best-single baseline must be chosen
     # on VALID. Choosing it on test makes it the maximum of several noisy test
@@ -177,7 +141,8 @@ def bootstrap_cell(dataset, fold, n_boot, seed):
                                          n_boot=n_boot, groups=groups, seed=seed + 5)
 
         rows.append({
-            "dataset": dataset, "fold": fold, "variant": tag,
+            "dataset": dataset, "fold": fold, "granularity": granularity,
+            "variant": tag,
             "best_single_model": best_name,
             "best_single_selected_on": selected_on,
             "n_test": int(ty.size),
@@ -253,21 +218,26 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--datasets", nargs="+", default=DATASETS)
     ap.add_argument("--folds", nargs="+", type=int, default=FOLDS)
+    ap.add_argument("--granularity", choices=["concept", "question"], default="concept",
+                    help="уровень подробности строки: пара «задание, компонент» или задание")
     ap.add_argument("--n-boot", type=int, default=2000)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--n-jobs", type=int, default=-1)
-    ap.add_argument("--out", type=Path,
-                    default=paths.ARTIFACTS_DIR / "ensembles" / "cluster_bootstrap_ccce.csv")
-    ap.add_argument("--pooled-out", type=Path,
-                    default=paths.ARTIFACTS_DIR / "ensembles" / "cluster_bootstrap_ccce_pooled.csv")
+    ap.add_argument("--out", type=Path, default=None)
+    ap.add_argument("--pooled-out", type=Path, default=None)
     args = ap.parse_args()
+    suffix = "" if args.granularity == "concept" else "_question"
+    if args.out is None:
+        args.out = paths.ARTIFACTS_DIR / "ensembles" / f"cluster_bootstrap_ccce{suffix}.csv"
+    if args.pooled_out is None:
+        args.pooled_out = paths.ARTIFACTS_DIR / "ensembles" / f"cluster_bootstrap_ccce{suffix}_pooled.csv"
 
     t0 = time.time()
     cells = [(ds, fold) for ds in args.datasets for fold in args.folds]
 
     def _run(ds, fold):
         t_cell = time.time()
-        rows = bootstrap_cell(ds, fold, args.n_boot, args.seed)
+        rows = bootstrap_cell(ds, fold, args.n_boot, args.seed, args.granularity)
         return ds, fold, rows, time.time() - t_cell
 
     results = Parallel(n_jobs=args.n_jobs, backend="loky", verbose=10)(

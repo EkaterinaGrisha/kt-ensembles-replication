@@ -15,6 +15,12 @@
 Уровень заданий доступен там, где у набора есть идентификаторы заданий. Где их
 нет (ASSISTments-2015), уровень компонентов и есть уровень заданий: разворота не
 происходит, и загрузчик возвращает те же самые массивы.
+
+Компонент знания на строку берётся по-разному на двух уровнях. На уровне пар он
+восстанавливается обходом последовательностей (`ktx.concept_ids`). На уровне
+заданий рядом с предсказаниями сохранены сквозные номера строк (`cidxs`) — это
+не коды компонентов, а индексы взаимодействий в файлах предобработки, и
+компонент берётся по ним из тех же файлов. Разница спрятана в `load_cell`.
 """
 from __future__ import annotations
 
@@ -24,17 +30,19 @@ from . import paths
 
 PRED = paths.ARTIFACTS_DIR / "predictions"
 
-# Поля предсказаний для двух уровней подробности.
+# Поля предсказаний для двух уровней подробности. `valid_k` и `test_k` — сквозные
+# номера строк, по которым восстанавливается компонент знания уровня заданий;
+# кодами компонентов они не являются.
 FIELDS = {
     "question": {
         "valid_y": "valid_y_true_q_pykt", "valid_p": "valid_y_prob_q_pykt",
-        "valid_c": "valid_cidxs_q_pykt",
-        "test_y": "y_true", "test_p": "y_prob", "test_c": "test_cidxs",
+        "valid_k": "valid_cidxs_q_pykt",
+        "test_y": "y_true", "test_p": "y_prob", "test_k": "test_cidxs",
         "groups": "groups",
     },
     "concept": {
-        "valid_y": "valid_y_true", "valid_p": "valid_y_prob", "valid_c": None,
-        "test_y": "concept_y_true", "test_p": "concept_y_prob", "test_c": None,
+        "valid_y": "valid_y_true", "valid_p": "valid_y_prob", "valid_k": None,
+        "test_y": "concept_y_true", "test_p": "concept_y_prob", "test_k": None,
         "groups": "concept_groups",
     },
 }
@@ -43,17 +51,20 @@ FIELDS = {
 class DeepInputs:
     """Валидационная и тестовая матрицы, коды компонентов и учащиеся."""
 
-    def __init__(self, valid_y, valid_matrix, valid_concepts,
-                 test_y, test_matrix, test_concepts, groups, models, granularity):
+    def __init__(self, valid_y, valid_matrix, valid_keys,
+                 test_y, test_matrix, test_keys, groups, models, granularity):
         self.valid_y = valid_y
         self.valid_matrix = valid_matrix
-        self.valid_concepts = valid_concepts
+        self.valid_keys = valid_keys
         self.test_y = test_y
         self.test_matrix = test_matrix
-        self.test_concepts = test_concepts
+        self.test_keys = test_keys
         self.groups = groups
         self.models = models
         self.granularity = granularity
+        self.valid_concepts = None
+        self.test_concepts = None
+        self.valid_students = None
 
     def __iter__(self):
         """Совместимость с прежним распаковыванием кортежа."""
@@ -68,8 +79,8 @@ def available(dataset: str, fold: int, model: str, granularity: str) -> bool:
         return False
     files = set(np.load(p).files)
     need = {f["valid_y"], f["valid_p"], f["test_y"], f["test_p"]}
-    if f["valid_c"]:
-        need |= {f["valid_c"], f["test_c"]}
+    if f["valid_k"]:
+        need |= {f["valid_k"], f["test_k"]}
     return need <= files
 
 
@@ -83,7 +94,7 @@ def load(dataset: str, fold: int, models: list[str],
     if granularity not in FIELDS:
         raise ValueError(f"неизвестный уровень подробности: {granularity!r}")
     f = FIELDS[granularity]
-    v_ref = t_ref = vconc = tconc = groups = None
+    v_ref = t_ref = v_keys = t_keys = groups = None
     v_cols, t_cols, kept = [], [], []
     for model in models:
         p = PRED / dataset / f"{model}_fold{fold}.npz"
@@ -91,17 +102,17 @@ def load(dataset: str, fold: int, models: list[str],
             continue
         d = np.load(p)
         need = {f["valid_y"], f["valid_p"], f["test_y"], f["test_p"]}
-        if f["valid_c"]:
-            need |= {f["valid_c"], f["test_c"]}
+        if f["valid_k"]:
+            need |= {f["valid_k"], f["test_k"]}
         if not need <= set(d.files):
             continue
         vy = np.asarray(d[f["valid_y"]]).astype(int)
         ty = np.asarray(d[f["test_y"]]).astype(int)
         if v_ref is None:
             v_ref, t_ref = vy, ty
-            if f["valid_c"]:
-                vconc = np.asarray(d[f["valid_c"]]).astype(np.int64)
-                tconc = np.asarray(d[f["test_c"]]).astype(np.int64)
+            if f["valid_k"]:
+                v_keys = np.asarray(d[f["valid_k"]]).astype(np.int64)
+                t_keys = np.asarray(d[f["test_k"]]).astype(np.int64)
             g = d[f["groups"]] if f["groups"] in d.files else None
             groups = g if g is not None and g.size else None
         elif not np.array_equal(vy, v_ref) or not np.array_equal(ty, t_ref):
@@ -111,9 +122,46 @@ def load(dataset: str, fold: int, models: list[str],
         kept.append(model)
     if len(kept) < 2 or v_ref is None:
         return None
-    if f["valid_c"] and (vconc.size != v_ref.size or tconc.size != t_ref.size):
+    if f["valid_k"] and (v_keys.size != v_ref.size or t_keys.size != t_ref.size):
         return None
     if groups is not None and groups.size != t_ref.size:
         groups = None
-    return DeepInputs(v_ref, np.column_stack(v_cols), vconc,
-                      t_ref, np.column_stack(t_cols), tconc, groups, kept, granularity)
+    return DeepInputs(v_ref, np.column_stack(v_cols), v_keys,
+                      t_ref, np.column_stack(t_cols), t_keys, groups, kept, granularity)
+
+
+def load_cell(dataset: str, fold: int, models: list[str],
+              granularity: str = "question") -> DeepInputs | None:
+    """То же, что `load`, но с кодами компонентов знания на обеих сторонах.
+
+    На уровне пар коды восстанавливаются обходом последовательностей, на уровне
+    заданий — по сквозным номерам строк, сохранённым рядом с предсказаниями
+    (`ktx.concept_ids`). Расчётам эта разница не нужна, поэтому она спрятана
+    здесь: сценарий получает матрицы и коды одинаково на обоих уровнях.
+
+    Заодно заполняется учащийся на каждую валидационную строку: он нужен там,
+    где валидационную часть делят на блоки.
+
+    Возвращает ``None``, если уровень недоступен или если коды разошлись по
+    длине с предсказаниями — считать на несовпадающих строках нельзя.
+    """
+    got = load(dataset, fold, models, granularity)
+    if got is None:
+        return None
+    if got.valid_keys is None:
+        from .concept_ids import (concept_ids_for_test, concept_ids_for_valid,
+                                  student_ids_for_valid)
+        got.valid_concepts = concept_ids_for_valid(dataset, valid_fold=fold)
+        got.test_concepts = concept_ids_for_test(dataset)
+        got.valid_students = student_ids_for_valid(dataset, valid_fold=fold)
+    else:
+        from .concept_ids import question_level_concepts
+        got.valid_concepts, got.test_concepts, got.valid_students = \
+            question_level_concepts(dataset, fold, got.valid_keys, got.test_keys,
+                                    got.valid_y, got.test_y)
+    if got.valid_students is not None and got.valid_students.size != got.valid_y.size:
+        got.valid_students = None
+    if (got.valid_concepts.size != got.valid_y.size
+            or got.test_concepts.size != got.test_y.size):
+        return None
+    return got

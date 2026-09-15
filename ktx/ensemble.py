@@ -1373,8 +1373,8 @@ class CCCE(EnsembleBase):
                 out[:, m] = cal.transform(probs[:, m])
         return out
 
-    def fit(self, valid_probs, valid_labels, valid_concepts=None
-             ) -> "CCCE":  # type: ignore[override]
+    def fit(self, valid_probs, valid_labels, valid_concepts=None,
+             valid_groups=None) -> "CCCE":  # type: ignore[override]
         from .calibration import ConceptAwareIsotonic
 
         if valid_concepts is None:
@@ -1385,6 +1385,12 @@ class CCCE(EnsembleBase):
         if not (p.shape[0] == y.size == c.size):
             raise ValueError(f"valid_probs/labels/concepts length mismatch: "
                               f"{p.shape[0]} / {y.size} / {c.size}")
+        g = None if valid_groups is None else np.asarray(valid_groups).ravel()
+        if g is not None and g.size != y.size:
+            raise ValueError(f"valid_groups length {g.size} != {y.size}")
+        self._fit_groups = g
+        self.cross_fit_unit_ = ("row" if g is None or self.cross_fit <= 1
+                                else "student")
         k = p.shape[1]
 
         # STAGE 1: fit per-component pre-calibration (concept-aware / global / none)
@@ -1427,9 +1433,24 @@ class CCCE(EnsembleBase):
         return out
 
     def _folds(self, n: int):
-        """Deterministic split of the validation rows into ``cross_fit`` parts."""
+        """Deterministic split of the validation part into ``cross_fit`` blocks.
+
+        With learner ids given (``valid_groups`` of ``fit``) the split is by
+        learner: a row goes where its learner went. Splitting by row would put
+        one learner on both sides of the division, and a calibration curve
+        fitted on the rest of that learner's answers is not fitted out of
+        sample. Without ids the split falls back to rows, and
+        ``cross_fit_unit_`` says which of the two happened.
+        """
         rng = np.random.default_rng(0)
-        return np.array_split(rng.permutation(n), self.cross_fit)
+        g = getattr(self, "_fit_groups", None)
+        if g is None:
+            return np.array_split(rng.permutation(n), self.cross_fit)
+        units = np.unique(g)
+        blocks = np.array_split(rng.permutation(units.size), self.cross_fit)
+        where = {u: b for b, block in enumerate(blocks) for u in units[block]}
+        assign = np.array([where[u] for u in g])
+        return [np.flatnonzero(assign == b) for b in range(self.cross_fit)]
 
     def _crossfit_pre(self, p, y, c, k):
         """Stage-1 outputs produced out of fold: no row is calibrated by a

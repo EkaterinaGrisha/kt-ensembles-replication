@@ -274,8 +274,9 @@ class ConceptAwareIsotonic:
         Empirical-Bayes shrinkage parameter. lambda = 0 means "use
         per-concept fit as-is when available"; lambda -> inf means "always
         use global fit". Default 0.0 = no shrinkage (per-concept only,
-        with global fallback for small concepts). Typically tuned via
-        nested CV per (dataset, model) — see scripts/tune_lambda_shrinkage.py.
+        with global fallback for small concepts), and 0.0 is what every result
+        in this repository was produced with: the parameter is exposed, not
+        tuned. Sweeping it per (dataset, model) is left to the reader.
     """
 
     def __init__(self, n_min: int = 30, shrinkage_lambda: float = 0.0) -> None:
@@ -387,7 +388,7 @@ class DifficultyBucketIsotonic:
 
 
 # Registered separately from CALIBRATORS to avoid breaking iterator-based
-# consumers in scripts/deep_calibration_5fold_qlvl.py etc. — those iterate
+# consumers that iterate
 # CALIBRATORS and call fit(prob, label) with 2 args. Concept-aware needs 3.
 CONCEPT_AWARE_CALIBRATORS = {
     "concept_aware_isotonic": ConceptAwareIsotonic,   # needs concept_id per row

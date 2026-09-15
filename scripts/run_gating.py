@@ -1,37 +1,39 @@
 """Conditional-gating ensembles on the
-deep concept-level subset.
+deep subset, at either level of row granularity.
 
-Runs ``StaticConceptWeights`` and ``LinearGating`` (from ``ktx/ensemble.py``)
-per (dataset, fold), on the deep-family concept-level valid + test data:
+Runs ``StaticConceptWeights``, ``GlobalStackWithConceptIntercept`` and
+``LinearGating`` (from ``ktx/ensemble.py``) per (dataset, fold). Both sides
+come from ``ktx.deep_inputs.load_cell``, which knows the two levels:
 
-  * fit side  — ``valid_y_true`` / ``valid_y_prob`` per deep NPZ (concept-
-    level, 164 550 rows on algebra2005), with concept-id per row from
-    ``ktx.downstream.concept_ids_for_valid``.
-  * test side — ``concept_y_true`` / ``concept_y_prob`` per deep NPZ
-    (134 674 rows on algebra2005), with concept-id from
-    ``concept_ids_for_test``.
+  * ``--granularity concept`` (default) — a row is an item-component pair.
+    Fit side ``valid_y_true`` / ``valid_y_prob`` (164 550 rows on
+    algebra2005), test side ``concept_y_true`` / ``concept_y_prob``
+    (134 674 rows); the concept-id per row is reconstructed by
+    ``ktx.concept_ids``, which repeats the pyKT evaluation walk.
+  * ``--granularity question`` — a row is an item. Fit side
+    ``valid_y_*_q_pykt`` (112 859 rows on algebra2005), test side
+    ``y_true`` / ``y_prob`` (92 945 rows); the concept-id per row is read
+    straight off the npz (``valid_cidxs_q_pykt`` / ``test_cidxs``), so no
+    walk is needed.
 
 Baselines per cell: arithmetic mean of the k component predictions, best
 single component, and — for direct comparison to stacking — the
-``LogisticStackedBlender`` (concept-level stacking).
+``LogisticStackedBlender`` fitted at the same level.
 
 Scope caveats:
   * Deep-only. Classical NPZs lack persisted concept-level predictions.
     Classical + heterogeneous gating land after the pyKT cidxs re-run
     (task #26) enables cross-family alignment.
-  * Concept-level. Question-level gating requires walking
-    ``question_level_events`` for the concept-id per event and joining
-    to the aggregated question-level predictions — deferred to v2 for
-    apples-to-apples with the question-level stacking numbers.
-  * assist2015 is concept-only in both preprocess and dumps; no special
-    handling needed.
+  * assist2015 has no item ids: its two levels coincide, and the
+    question-level pass skips it (the npz carries no ``test_cidxs``).
 
 Outputs
 -------
-``artifacts/ensembles/gating_deep.csv``. Columns per (dataset, fold,
-meta_learner):
+``artifacts/ensembles/gating_deep.csv`` at concept level,
+``gating_deep_question.csv`` at question level. Columns per
+(dataset, fold, meta_learner):
 
-    dataset, fold, meta_learner, models_in_subset,
+    dataset, fold, granularity, meta_learner, models_in_subset,
     n_valid, n_test, n_concepts_fit,
     gated_auc, gated_ece, gated_brier,
     mean_auc,  mean_ece,  mean_brier,
@@ -47,6 +49,9 @@ CLI
     KMP_DUPLICATE_LIB_OK=TRUE OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
         OPENBLAS_NUM_THREADS=1 python -m scripts.run_gating \
         --datasets algebra2005 --folds 0
+    KMP_DUPLICATE_LIB_OK=TRUE OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+        OPENBLAS_NUM_THREADS=1 python -m scripts.run_gating \
+        --granularity question
 """
 from __future__ import annotations
 
@@ -72,8 +77,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ktx import paths
-from ktx.downstream import concept_ids_for_test, concept_ids_for_valid
+from ktx import deep_inputs, paths
 from ktx.ensemble import (
     ArithmeticMean,
     LinearGating,
@@ -90,43 +94,6 @@ DEEP_MODELS = ["dkt", "sakt", "akt", "simplekt"]
 DEEP_ROOT = paths.ARTIFACTS_DIR / "predictions"
 
 
-def _load_deep_concept(dataset: str, model: str, fold: int
-                        ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
-    """Return (valid_y, valid_p, test_y, test_p) at concept-level for one
-    deep model / fold. All arrays are 1-D and pass through as-is; the
-    caller stacks per-model probs into a (n, k) matrix.
-    """
-    p = DEEP_ROOT / dataset / f"{model}_fold{fold}.npz"
-    if not p.exists():
-        return None
-    d = np.load(p)
-    need = {"valid_y_true", "valid_y_prob", "concept_y_true", "concept_y_prob"}
-    if not need <= set(d.files):
-        return None
-    return (d["valid_y_true"].astype(int),      d["valid_y_prob"].astype(np.float64),
-            d["concept_y_true"].astype(int),    d["concept_y_prob"].astype(np.float64))
-
-
-def _stack_deep(dataset: str, models: list[str], fold: int):
-    v_y_ref = t_y_ref = None
-    v_cols, t_cols, kept = [], [], []
-    for m in models:
-        got = _load_deep_concept(dataset, m, fold)
-        if got is None:
-            continue
-        vy, vp, ty, tp = got
-        if v_y_ref is None:
-            v_y_ref, t_y_ref = vy, ty
-        else:
-            if not np.array_equal(vy, v_y_ref) or not np.array_equal(ty, t_y_ref):
-                print(f"  [warn] {dataset} f{fold}: {m} y arrays disagree; skip cell")
-                return None
-        v_cols.append(vp); t_cols.append(tp); kept.append(m)
-    if len(kept) < 2 or v_y_ref is None or t_y_ref is None:
-        return None
-    return v_y_ref, np.column_stack(v_cols), t_y_ref, np.column_stack(t_cols), kept
-
-
 def _metrics(y, p, n_bins: int = 15) -> dict[str, float]:
     return {
         "auc": auc_metric(y, p),
@@ -135,26 +102,18 @@ def _metrics(y, p, n_bins: int = 15) -> dict[str, float]:
     }
 
 
-def process_cell(dataset: str, fold: int, models: list[str]) -> list[dict]:
-    st = _stack_deep(dataset, models, fold)
-    if st is None:
-        return []
-    vy, vmatrix, ty, tmatrix, kept = st
-
-    # Concept-ids per row (aligned by construction with the deep concept-level
-    # arrays: valid_y_true / concept_y_true row order == pyKT walk order).
+def process_cell(dataset: str, fold: int, models: list[str],
+                 granularity: str = "concept") -> list[dict]:
     try:
-        vconc = concept_ids_for_valid(dataset, valid_fold=fold)
-        tconc = concept_ids_for_test(dataset)
+        cell = deep_inputs.load_cell(dataset, fold, models, granularity)
     except FileNotFoundError as e:
         print(f"  [skip] {dataset} f{fold}: concept-id lookup missing ({e})")
         return []
-    if vconc.size != vy.size:
-        print(f"  [warn] {dataset} f{fold}: valid concept-ids size {vconc.size} != y size {vy.size}; skip")
+    if cell is None:
         return []
-    if tconc.size != ty.size:
-        print(f"  [warn] {dataset} f{fold}: test concept-ids size {tconc.size} != y size {ty.size}; skip")
-        return []
+    vy, vmatrix, ty, tmatrix, kept = (cell.valid_y, cell.valid_matrix,
+                                      cell.test_y, cell.test_matrix, cell.models)
+    vconc, tconc = cell.valid_concepts, cell.test_concepts
 
     # Baselines shared across gating heads
     mean_pred = ArithmeticMean().predict(tmatrix)
@@ -215,6 +174,7 @@ def process_cell(dataset: str, fold: int, models: list[str]) -> list[dict]:
         rows.append({
             "dataset": dataset,
             "fold": fold,
+            "granularity": granularity,
             "meta_learner": ml_name,
             "models_in_subset": ",".join(kept),
             "n_valid": int(vy.size),
@@ -249,15 +209,19 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--datasets", nargs="+", default=DATASETS)
     ap.add_argument("--folds", nargs="+", type=int, default=FOLDS)
-    ap.add_argument("--out", type=Path,
-                    default=paths.ARTIFACTS_DIR / "ensembles" / "gating_deep.csv")
+    ap.add_argument("--granularity", choices=["concept", "question"], default="concept",
+                    help="уровень подробности строки: пара «задание, компонент» или задание")
+    ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args()
+    if args.out is None:
+        suffix = "" if args.granularity == "concept" else "_question"
+        args.out = paths.ARTIFACTS_DIR / "ensembles" / f"gating_deep{suffix}.csv"
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     rows: list[dict] = []
     for ds in args.datasets:
         for fold in args.folds:
-            cell_rows = process_cell(ds, fold, DEEP_MODELS)
+            cell_rows = process_cell(ds, fold, DEEP_MODELS, args.granularity)
             if not cell_rows:
                 print(f"[{ds:22s} f{fold}] SKIP")
                 continue

@@ -13,7 +13,7 @@ pairs. Consistent with the rationale in the ``ktx/ensemble.py`` design note.
 
 Outputs
 -------
-``artifacts/ensembles/cluster_bootstrap_stacking.csv`` — one row per
+``artifacts/ensembles/cluster_bootstrap_stacking_all_v4.csv`` — one row per
 (dataset, fold, subset). Same schema as the simple-ensemble bootstrap
 minus the ``aggregator`` axis (there is only one meta-learner in this
 first pass — the LogisticStackedBlender). Columns:
@@ -25,7 +25,7 @@ first pass — the LogisticStackedBlender). Columns:
     stacked_ece, best_single_ece, delta_ece, ece_ci_low, ece_ci_high, ece_p
 
 Pooled 5-fold summary:
-``artifacts/ensembles/cluster_bootstrap_stacking_pooled.csv``.
+``artifacts/ensembles/cluster_bootstrap_stacking_all_pooled_v4.csv``.
 
 CLI
 ---
