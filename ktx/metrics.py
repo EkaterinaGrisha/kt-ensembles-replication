@@ -9,7 +9,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 import numpy as np
-from netcal.metrics import ECE, MCE
 from sklearn.metrics import (
     accuracy_score,
     brier_score_loss,
@@ -129,8 +128,14 @@ def compute_metrics(y_true, y_prob, n_bins: int = 10) -> MetricSet:
         base_rate=float(y_true.mean()),
         reliability=reliability_bins(y_true, y_prob, n_bins),
     )
-    # netcal calibration errors (guard tiny/degenerate inputs)
+    # netcal calibration errors (guard tiny/degenerate inputs).
+    # The import is local on purpose: netcal pulls torch and matplotlib, while
+    # every ensemble artifact in this project is produced through
+    # ``ece_equal_mass`` below, which needs nothing but numpy. Importing it at
+    # module level would make that heavy chain a hard requirement of every
+    # script that only wants the area under the curve.
     try:
+        from netcal.metrics import ECE, MCE
         ms.ece = float(ECE(bins=n_bins).measure(y_prob, y_true))
         ms.mce = float(MCE(bins=n_bins).measure(y_prob, y_true))
     except Exception:

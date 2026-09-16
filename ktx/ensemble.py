@@ -388,8 +388,8 @@ class XGBoostStackedBlender(EnsembleBase):
     are held to sensible defaults for the KT feature scale — the meta-learner
     is fit on ~50k-160k validation rows depending on dataset, k=4 features,
     so a shallow (max_depth=3) modest-tree (n_estimators=200) config is
-    both fast and does not overfit. Rq3_plan.md §3 Exp B3 notes XGBoost is
-    the "how much can we squeeze?" upper bound candidate — the tuning grid
+    both fast and does not overfit. Boosting is the "how much can we
+    squeeze?" upper bound candidate — the tuning grid
     lives in separate sweeps, this class ships the honest default.
 
     Handles augmented context features via the optional ``extra_features``

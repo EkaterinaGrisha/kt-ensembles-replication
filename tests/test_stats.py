@@ -101,9 +101,24 @@ def test_holm_smallest_p_matches_bonferroni_factor():
 # need only numpy and scipy -- and it must be a per-test skip: a module-level
 # `importorskip` would silently drop this whole file, including the DeLong and Holm
 # tests that have no such dependency.
+def _usable(module: str) -> bool:
+    """Доступна ли необязательная зависимость.
+
+    Проверяется ввозом, а не поиском файла: `find_spec` отвечает только на
+    вопрос «лежит ли пакет», и сломанная установка его проходит, а потом падает
+    посреди проверки. Для отсутствующего пакета ввоз обрывается сразу, поэтому
+    лишнего времени это не стоит.
+    """
+    try:
+        importlib.import_module(module)
+    except Exception:
+        return False
+    return True
+
+
 needs_netcal = pytest.mark.skipif(
-    importlib.util.find_spec("netcal") is None,
-    reason="ece_metric needs netcal (pulls torch); install ktx[calibration] to run these")
+    not _usable("netcal"),
+    reason="ece_metric needs netcal; install ktx[calibration] to run these")
 
 
 @needs_netcal

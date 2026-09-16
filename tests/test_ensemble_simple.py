@@ -1,6 +1,8 @@
 """Unit tests for parameter-free ensemble aggregators."""
 from __future__ import annotations
 
+import importlib
+
 import numpy as np
 import pytest
 
@@ -304,12 +306,48 @@ def test_stacked_learns_positive_weights_when_components_all_helpful():
 # ─── Additional meta-learners ──────────────────────────────────────────── #
 
 
+# ``XGBoostStackedBlender`` импортирует xgboost лениво, внутри fit, поэтому файл
+# грузится и без него, а падают только те проверки, которые доходят до обучения.
+# Пропуск делается по одному параметру и по одному тесту, а не на весь файл: иначе
+# вместе с бустингом молча исчезли бы все остальные надстройки, которым хватает
+# numpy и scikit-learn. Тот же приём уже применён к netcal в test_stats.py.
+def _usable(module: str) -> bool:
+    """Доступна ли необязательная зависимость.
+
+    Проверяется ввозом, а не поиском файла: `find_spec` отвечает только на
+    вопрос «лежит ли пакет», и сломанная установка его проходит, а потом падает
+    посреди проверки. Для отсутствующего пакета ввоз обрывается сразу, поэтому
+    лишнего времени это не стоит.
+    """
+    try:
+        importlib.import_module(module)
+    except Exception:
+        return False
+    return True
+
+
+needs_netcal = pytest.mark.skipif(
+    not _usable("netcal"),
+    reason="проверка меряет ошибку калибровки через netcal; "
+           "поставьте ktx[calibration]")
+
+needs_xgboost = pytest.mark.skipif(
+    not _usable("xgboost"),
+    reason="надстройке на бустинге нужен xgboost; поставьте ktx[compute]")
+
+# Реестру бустинг доступен и без самой библиотеки: класс ввозится, а xgboost
+# нужен ему только при работе. Поэтому списка два, и метка стоит лишь на том,
+# где надстройка действительно обучается или строит предсказание.
 ALL_META_LEARNERS = [
     LogisticStackedBlender,
     RidgeStackedBlender,
     BayesianModelAveraging,
     XGBoostStackedBlender,
     MLPStackedBlender,
+]
+RUNNING_META_LEARNERS = [
+    c if c is not XGBoostStackedBlender else pytest.param(c, marks=needs_xgboost)
+    for c in ALL_META_LEARNERS
 ]
 
 
@@ -318,13 +356,13 @@ def test_meta_learner_registry_contains_class(cls):
     assert cls in STACKED_BLENDERS.values()
 
 
-@pytest.mark.parametrize("cls", ALL_META_LEARNERS)
+@pytest.mark.parametrize("cls", RUNNING_META_LEARNERS)
 def test_meta_learner_predict_before_fit_raises(cls):
     with pytest.raises(RuntimeError, match="fit"):
         cls().predict(_random_probs())
 
 
-@pytest.mark.parametrize("cls", ALL_META_LEARNERS)
+@pytest.mark.parametrize("cls", RUNNING_META_LEARNERS)
 def test_meta_learner_fit_predict_end_to_end(cls):
     """All meta-learners follow the fit-then-predict contract and produce
     outputs in [0, 1] with the expected shape."""
@@ -336,7 +374,7 @@ def test_meta_learner_fit_predict_end_to_end(cls):
     assert np.all(out >= 0) and np.all(out <= 1)
 
 
-@pytest.mark.parametrize("cls", ALL_META_LEARNERS)
+@pytest.mark.parametrize("cls", RUNNING_META_LEARNERS)
 def test_meta_learner_lifts_auc_over_worst_component(cls):
     """A trained meta-learner should not be strictly worse than the worst
     single component on a synthetic setup where every component carries the
@@ -421,6 +459,7 @@ def test_bma_temperature_controls_concentration():
 # ─── XGBoost-specific ──────────────────────────────────────────────────── #
 
 
+@needs_xgboost
 def test_xgb_extra_features_augmentation():
     """Fit with extra_features should accept 1-D or 2-D array without
     changing the interface for predict."""
@@ -434,6 +473,7 @@ def test_xgb_extra_features_augmentation():
     assert out.shape == (400,)
 
 
+@needs_xgboost
 def test_xgb_extra_features_shape_mismatch_raises():
     y, matrix, _, _ = _synthetic_ensemble_setup(n=200, k=3)
     with pytest.raises(ValueError, match="extra_features rows"):
@@ -697,6 +737,7 @@ def test_ccce_shrinkage_lambda_smoke():
     assert out.shape == (700,)
 
 
+@needs_netcal
 def test_bootstrap_wrapper_supports_ece_metric():
     """Regression: metric_fn is generic, not AUC-specific. ECE on 4-model mean
     ensemble should yield a finite CI even with small n_boot."""

@@ -50,7 +50,8 @@ SUBSET = {"простые": "classical", "глубокие": "deep"}
 WORDS = {
     "нуля": 0, "одной": 1, "одном": 1, "двух": 2, "трёх": 3, "четырёх": 4, "пяти": 5,
     "шести": 6, "семи": 7, "девяти": 9, "одиннадцать": 11, "одиннадцати": 11,
-    "тринадцати": 13, "четырнадцати": 14, "тридцати трёх": 33, "тридцати пяти": 35,
+    "тринадцать": 13, "тринадцати": 13, "четырнадцати": 14, "двадцати семи": 27,
+    "тридцати трёх": 33, "тридцати пяти": 35,
     "пятидесяти двух": 52, "пятидесяти девяти": 59, "шестидесяти пяти": 65,
 }
 
@@ -143,6 +144,21 @@ def md_table(text: str, anchor: str, which: int = 0) -> list[list[str]]:
 
 
 # ------------------------------------------------------------- артефакты
+CONCEPT_ONLY = "assist2015"
+
+
+def item_level(question: pd.DataFrame, concept: pd.DataFrame, what: str) -> pd.DataFrame:
+    """Строки уровня заданий по всем семи наборам — так же, как их собирает
+    сборщик таблиц. У ASSISTments-2015 заданий нет, и его прогон на строках-парах
+    для него и есть прогон на строках-заданиях."""
+    if CONCEPT_ONLY in set(question.dataset):
+        raise SystemExit(f"{what}: {CONCEPT_ONLY} есть в прогоне на заданиях")
+    extra = concept[concept.dataset == CONCEPT_ONLY]
+    if extra.empty:
+        raise SystemExit(f"{what}: нет строк {CONCEPT_ONLY} в прогоне на парах")
+    return pd.concat([question, extra], ignore_index=True)
+
+
 def _maybe(path):
     """Результат, которого может ещё не быть: сверщик тогда скажет об этом сам."""
     return pd.read_csv(path) if path.exists() else None
@@ -154,26 +170,44 @@ def load() -> dict:
         "comp": pd.read_csv(ENS / "component_models.csv"),
         "simple": pd.read_csv(ENS / "cluster_bootstrap_simple_ensembles.csv"),
         "stack": pd.read_csv(ENS / "cluster_bootstrap_stacking_all_v4.csv"),
-        "gate": {"deep": pd.read_csv(ENS / "gating_deep.csv"),
+        # Основной уровень — строки-задания; уровень пар остаётся под ключами
+        # с суффиксом _pair, из них собрано приложение (таблицы 12 и 13).
+        "gate": {"deep": item_level(pd.read_csv(ENS / "gating_deep_question.csv"),
+                                    pd.read_csv(ENS / "gating_deep.csv"), "взвешивание"),
                  "classical": pd.read_csv(ENS / "gating_classical.csv")},
-        "gate_boot": {"deep": pd.read_csv(ENS / "cluster_bootstrap_gating.csv"),
+        "gate_boot": {"deep": item_level(
+                          pd.read_csv(ENS / "cluster_bootstrap_gating_question.csv"),
+                          pd.read_csv(ENS / "cluster_bootstrap_gating.csv"),
+                          "взвешивание, бутстрап"),
                       "classical": pd.read_csv(
                           ENS / "cluster_bootstrap_gating_classical.csv")},
-        "attn_moe": pd.read_csv(ENS / "cluster_bootstrap_attention_moe.csv"),
-        "ccce_cf": pd.read_csv(ENS / "ccce_crossfit_deep.csv"),
-        "ccce": pd.read_csv(ENS / "ccce_deep.csv"),
-        "ccce_boot": pd.read_csv(ENS / "cluster_bootstrap_ccce.csv"),
+        "gate_pair": pd.read_csv(ENS / "gating_deep.csv"),
+        "gate_pair_boot": pd.read_csv(ENS / "cluster_bootstrap_gating.csv"),
+        "attn_moe": item_level(
+            pd.read_csv(ENS / "cluster_bootstrap_attention_moe_question.csv"),
+            pd.read_csv(ENS / "cluster_bootstrap_attention_moe.csv"), "внимание и смесь"),
+        "ccce_cf": item_level(pd.read_csv(ENS / "ccce_crossfit_deep_question.csv"),
+                              pd.read_csv(ENS / "ccce_crossfit_deep.csv"), "кросс-фит"),
+        "ccce": item_level(pd.read_csv(ENS / "ccce_deep_question.csv"),
+                           pd.read_csv(ENS / "ccce_deep.csv"), "три ступени"),
+        "ccce_boot": item_level(
+            pd.read_csv(ENS / "cluster_bootstrap_ccce_question.csv"),
+            pd.read_csv(ENS / "cluster_bootstrap_ccce.csv"), "три ступени, бутстрап"),
+        "ccce_pair": pd.read_csv(ENS / "ccce_deep.csv"),
+        "ccce_pair_boot": pd.read_csv(ENS / "cluster_bootstrap_ccce.csv"),
         "spread": pd.read_csv(ENS / "prediction_spread.csv"),
         "align": pd.read_csv(ENS / "family_alignment.csv").set_index("dataset"),
         "gran": pd.read_csv(ENS / "deep_granularity.csv").set_index("dataset"),
-        "seeds": pd.read_csv(ENS / "attention_seed_spread.csv"),
+        "seeds": item_level(pd.read_csv(ENS / "attention_seed_spread_question.csv"),
+                            pd.read_csv(ENS / "attention_seed_spread.csv"),
+                            "разброс по начальным состояниям"),
         "nmin": pd.read_csv(ENS / "gating_nmin_sensitivity.csv"),
-        "gate_q": pd.read_csv(ENS / "gating_deep_question.csv"),
-        "ccce_q": pd.read_csv(ENS / "ccce_deep_question.csv"),
-        "gate_q_boot": _maybe(ENS / "cluster_bootstrap_gating_question.csv"),
-        "ccce_q_boot": _maybe(ENS / "cluster_bootstrap_ccce_question.csv"),
-        "attn_mps": pd.read_csv(ENS / "attention_gating_deep.csv"),
-        "moe_mps": pd.read_csv(ENS / "moe_deep.csv"),
+        "attn_mps": item_level(pd.read_csv(ENS / "attention_gating_deep_question.csv"),
+                               pd.read_csv(ENS / "attention_gating_deep.csv"),
+                               "внимание, точечный прогон"),
+        "moe_mps": item_level(pd.read_csv(ENS / "moe_deep_question.csv"),
+                              pd.read_csv(ENS / "moe_deep.csv"),
+                              "смесь, точечный прогон"),
         "multi": {ds: float((np.load(ENS / "classical_concepts" / f"{ds}.npz")
                              ["test_n_concepts"] > 1).mean())
                   for ds in DISPLAY
@@ -435,24 +469,14 @@ def check_table10(text: str, a: dict) -> None:
                       f"в тексте {m.group(2)}, в артефакте {sig}")
 
 
-def check_question_tables(text: str, a: dict) -> None:
-    """Таблицы 12 и 13: те же измерения на строках-заданиях, шесть наборов."""
-    gq, cq = a.get("gate_q_boot"), a.get("ccce_q_boot")
-    if gq is None or cq is None:
-        check(False, "Т12/Т13 / бутстрап уровня заданий", "артефактов нет")
-        return
-    if ("auc_p_vs_best_reject_holm" not in gq.columns
-            or "auc_p_vs_static_reject_holm" not in cq.columns):
-        check(False, "Т12/Т13 / поправка Холма",
-              "в бутстрапе уровня заданий нет колонок Холма — не запускался "
-              "add_holm_to_bootstraps")
-        return
+def check_pair_tables(text: str, a: dict) -> None:
+    """Таблицы 12 и 13: приложение, те же измерения на строках-парах."""
     rows = md_table(text, "**Табл. 12.**")
-    check(len(rows) == 6, "Т12 / число строк", f"строк {len(rows)}")
+    check(len(rows) == 7, "Т12 / число строк", f"строк {len(rows)}")
     for r in rows:
         ds = BACK.get(r[0])
         for j, gate in enumerate(GATES, start=1):
-            exp = mean_of(a["gate_q"], {"dataset": ds, "meta_learner": gate},
+            exp = mean_of(a["gate_pair"], {"dataset": ds, "meta_learner": gate},
                           "lift_gated_vs_best_auc")
             m = re.fullmatch(r"([−+]\d+\.\d+) \((\d)\)", r[j])
             if not m:
@@ -460,23 +484,23 @@ def check_question_tables(text: str, a: dict) -> None:
                 continue
             check(matches(m.group(1), exp), f"Т12 {r[0]}/{gate}",
                   f"в тексте {m.group(1)!r}, в артефакте {exp:.6f}")
-            n = sig_of(gq, {"dataset": ds, "meta_learner": gate},
+            n = sig_of(a["gate_pair_boot"], {"dataset": ds, "meta_learner": gate},
                        "auc_p_vs_best_reject_holm")
             check(int(m.group(2)) == n, f"Т12 {r[0]}/{gate} / значимость",
                   f"в тексте {m.group(2)}, в артефакте {n}")
     rows = md_table(text, "**Табл. 13.**")
-    check(len(rows) == 6, "Т13 / число строк", f"строк {len(rows)}")
+    check(len(rows) == 7, "Т13 / число строк", f"строк {len(rows)}")
     for r in rows:
         ds = BACK.get(r[0])
         for j, v in enumerate(VARIANTS, start=1):
-            exp = mean_of(a["ccce_q"], {"dataset": ds}, f"lift_{v}_vs_static_auc")
+            exp = mean_of(a["ccce_pair"], {"dataset": ds}, f"lift_{v}_vs_static_auc")
             m = re.fullmatch(r"([−+]\d+\.\d+) \((\d)\)", r[j])
             if not m:
                 check(False, f"Т13 {r[0]}/{v}", f"не разобрана ячейка {r[j]!r}")
                 continue
             check(matches(m.group(1), exp), f"Т13 {r[0]}/{v}",
                   f"в тексте {m.group(1)!r}, в артефакте {exp:.6f}")
-            n = sig_of(cq, {"dataset": ds, "variant": v},
+            n = sig_of(a["ccce_pair_boot"], {"dataset": ds, "variant": v},
                        "auc_p_vs_static_reject_holm")
             check(int(m.group(2)) == n, f"Т13 {r[0]}/{v} / значимость",
                   f"в тексте {m.group(2)}, в артефакте {n}")
@@ -598,25 +622,37 @@ def check_prose(text: str, a: dict) -> None:
           cls["static_concept_weights"].min())
     claim(s, "5.3 простые, максимум", r"на всех семи наборах, от \+\d+\.\d+ до \+(\d+\.\d+)",
           cls["static_concept_weights"].max())
-    claim(s, "5.3 глубокие, минимум", r"от (−\d+\.\d+) на EdNet-KT1-5k до",
+    claim(s, "5.3 глубокие, минимум", r"от \+(\d+\.\d+) на ASSISTments-2015 до",
           dp["static_concept_weights"].min())
-    claim(s, "5.3 глубокие, максимум", r"до \+(\d+\.\d+) на ASSISTments-2009",
+    claim(s, "5.3 глубокие, максимум", r"до \+(\d+\.\d+) на Algebra-2005",
           dp["static_concept_weights"].max())
     word_claim(s, "5.3 распределитель, простые",
                r"у простых моделей он отрицателен на (\S+) наборах из семи",
                int((cls["linear_gating"] < 0).sum()))
     word_claim(s, "5.3 распределитель, глубокие", r"у глубоких — на (\S+), и в обоих",
                int((dp["linear_gating"] < 0).sum()))
-    for key, name, pattern in (
-            ("classical", "простые",
-             r"не более чем на (\d+\.\d+) у простых моделей"),
-            ("deep", "глубокие",
-             r"не более чем на (\d+\.\d+) у глубоких")):
-        diff = (g[key]["global_stack_concept_intercept"]
-                - g[key]["static_concept_weights"])
-        claim(s, f"5.3 абляция, {name}", pattern, diff.abs().max())
-        if key == "deep":
-            globals()["_deep_diff"] = diff
+    # Абляция: у простых расхождение всюду мало, у глубоких — на пяти наборах
+    # мало, а на двух велико, и эти два названы поимённо.
+    gaps = {k: (g[k]["static_concept_weights"]
+                - g[k]["global_stack_concept_intercept"]) for k in g}
+    claim(s, "5.3 абляция, простые",
+          r"расхождение не\s*превышает (\d+\.\d+), наибольшее", gaps["classical"].abs().max())
+    big = gaps["deep"].abs().nlargest(2).index.tolist()
+    small = gaps["deep"].drop(big)
+    word_claim(s, "5.3 абляция, глубокие, малых наборов",
+               r"На (\S+) наборах из семи расхождение лежит в тех же", len(small))
+    claim(s, "5.3 абляция, глубокие, малые минимум",
+          r"в тех же пределах, от (−\d+\.\d+) до", small.min())
+    claim(s, "5.3 абляция, глубокие, малые максимум",
+          r"в тех же пределах, от −\d+\.\d+ до \+(\d+\.\d+)", small.max())
+    claim(s, "5.3 абляция, глубокие, Algebra",
+          r"На Algebra-2005 оно равно \+(\d+\.\d+)", gaps["deep"]["algebra2005"])
+    claim(s, "5.3 абляция, глубокие, EdNet",
+          r"а на EdNet-KT1-5k \+(\d+\.\d+), то есть", gaps["deep"]["ednet"])
+    for ds, pat in (("algebra2005", r"всего — (\d+\.\d+) %"),
+                    ("ednet", r"всего — \d+\.\d+ % и (\d+\.\d+) %")):
+        claim(s, f"5.3 доля многокомпонентных, {ds}", pat, 100 * a["multi"][ds])
+    globals()["_deep_diff"] = -gaps["deep"]
     for key, name, lo, hi in (
             ("classical", "простых", r"от (\d+) до \d+ компонентов у простых",
              r"от \d+ до (\d+) компонентов у простых"),
@@ -652,14 +688,15 @@ def check_prose(text: str, a: dict) -> None:
     word_claim(s, "5.3 против надстройки, значимых разбиений",
                r"проигрыш −\d+\.\d+ значим на (\S+) разбиениях из пяти",
                int(b.auc_p_vs_stack_reject_holm.sum()))
-    for key, name, pattern in (
-            ("classical", "простые", r"у простых моделей на всех (\S+) наборах"),
-            ("deep", "глубокие", r"у глубоких — на (\S+) из семи")):
+    for key, name in (("classical", "простые"), ("deep", "глубокие")):
         bb = a["gate_boot"][key]
         bb = bb[bb.meta_learner == "global_stack_concept_intercept"]
         n55 = int((bb.groupby("dataset").auc_p_vs_best_reject_holm.sum() == 5).sum())
-        word_claim(s, f"5.3 свободный член против лучшей, наборов 5/5, {name}",
-                   pattern, n55)
+        check(n55 == len(DISPLAY), f"5.3 свободный член против лучшей, 5/5 всюду, {name}",
+              f"наборов с 5/5: {n55} из {len(DISPLAY)}")
+    word_claim(s, "5.3 свободный член против лучшей, наборов",
+               r"на всех пяти разбиениях и\s*на всех (\S+) наборах в обоих семействах",
+               len(DISPLAY))
 
     nm = a["nmin"]
     for key, name, pats in (
@@ -691,25 +728,30 @@ def check_prose(text: str, a: dict) -> None:
     def sig5(d, base):
         return int((d.groupby("dataset")[f"auc_p_vs_{base}_reject_holm"].sum() == 5).sum())
 
-    claim(s, "5.4 внимание/лучшая минимум", r"модели — от \+(\d+\.\d+) до",
+    word_claim(s, "5.4 внимание/лучшая, число наборов",
+               r"одиночной модели на (\S+) наборах из семи", int((agg(at, "best") > 0).sum()))
+    claim(s, "5.4 внимание/лучшая минимум", r"из семи, от (−\d+\.\d+) до \+\d+\.\d+, и значимо",
           agg(at, "best").min())
-    claim(s, "5.4 внимание/лучшая максимум", r"модели — от \+\d+\.\d+ до \+(\d+\.\d+)",
+    claim(s, "5.4 внимание/лучшая максимум", r"из семи, от −\d+\.\d+ до \+(\d+\.\d+), и значимо",
           agg(at, "best").max())
     word_claim(s, "5.4 внимание/лучшая значимость",
-               r"разбиениях на (\S+) наборах, — но не выигрывает", sig5(at, "best"))
-    claim(s, "5.4 внимание/надстройка минимум", r"в пределах от (−\d+\.\d+) до \+\d+\.\d+, то есть",
+               r"разбиениях на всех (\S+), — но не выигрывает", sig5(at, "best"))
+    word_claim(s, "5.4 внимание/надстройка, число наборов",
+               r"надстройки оно положительно на (\S+) наборах из семи",
+               int((agg(at, "stack") > 0).sum()))
+    claim(s, "5.4 внимание/надстройка минимум", r"в пределах от (−\d+\.\d+) до \+\d+\.\d+\. Против",
           agg(at, "stack").min())
-    claim(s, "5.4 внимание/надстройка максимум", r"от −\d+\.\d+ до \+(\d+\.\d+), то есть",
+    claim(s, "5.4 внимание/надстройка максимум", r"в пределах от −\d+\.\d+ до \+(\d+\.\d+)\. Против",
           agg(at, "stack").max())
     word_claim(s, "5.4 внимание/взвешивание, число наборов",
-               r"оно хуже на (\S+) наборах из семи, в пределах",
+               r"оно хуже на (\S+) наборах из семи, от",
                int((agg(at, "static") < 0).sum()))
-    claim(s, "5.4 внимание/взвешивание минимум", r"в пределах от (−\d+\.\d+) до \+\d+\.\d+, и значимо",
+    claim(s, "5.4 внимание/взвешивание минимум", r"из семи, от (−\d+\.\d+) до \+\d+\.\d+, и на",
           agg(at, "static").min())
-    claim(s, "5.4 внимание/взвешивание максимум", r"от −\d+\.\d+ до \+(\d+\.\d+), и значимо",
+    claim(s, "5.4 внимание/взвешивание максимум", r"из семи, от −\d+\.\d+ до \+(\d+\.\d+), и на",
           agg(at, "static").max())
     word_claim(s, "5.4 внимание/взвешивание значимость",
-               r"разбиениях только на (\S+) наборах", sig5(at, "static"))
+               r"и на (\S+) это значимо на всех пяти", sig5(at, "static"))
     word_claim(s, "5.4 смесь/лучшая, число наборов",
                r"она отрицательна на (\S+) наборах из семи, от",
                int((agg(mo, "best") < 0).sum()))
@@ -741,7 +783,7 @@ def check_prose(text: str, a: dict) -> None:
     for scheme, ru, pats in (
             ("attention", "внимание",
              (r"У внимания размах по начальным состояниям внутри ячейки медианно "
-              r"(\d+\.\d+)", r"медианно \d+\.\d+, наибольший (\d+\.\d+), и в четырёх")),
+              r"(\d+\.\d+)", r"медианно \d+\.\d+, наибольший (\d+\.\d+), и в двух")),
             ("moe", "смесь",
              (r"медианно (\d+\.\d+) при наибольшем", r"при наибольшем (\d+\.\d+)"))):
         x = seeds[seeds.scheme == scheme]
@@ -775,8 +817,16 @@ def check_prose(text: str, a: dict) -> None:
     st.columns = VARIANTS
     bs = ccce.groupby("dataset")[[f"lift_{v}_vs_best_auc" for v in VARIANTS]].mean()
     bs.columns = VARIANTS
-    claim(s, "5.5 полная максимум", r"рис\. 3\): от (−\d+\.\d+) до", st.full.max())
-    claim(s, "5.5 полная минимум", r"рис\. 3\): от −\d+\.\d+ до (−\d+\.\d+)", st.full.min())
+    # Диапазон в прозе — по тем наборам, где схема проигрывает; седьмой назван
+    # отдельным абзацем, и смешивать его со знаком «минус» нельзя.
+    neg_full = st.full[st.full < 0]
+    claim(s, "5.5 полная максимум", r"рис\. 3\): от (−\d+\.\d+) до", neg_full.max())
+    claim(s, "5.5 полная минимум", r"рис\. 3\): от −\d+\.\d+ до (−\d+\.\d+)", neg_full.min())
+    word_claim(s, "5.5 число проигрышных наборов",
+               r"компонентам\s*знания на (\S+) наборах из семи", len(neg_full))
+    ex = st.full[st.full > 0]
+    check(len(ex) == 1, "5.5 единственное исключение", f"положительных наборов {len(ex)}")
+    claim(s, "5.5 исключение, величина", r"на нём схема выигрывает: \+(\d+\.\d+)", ex.iloc[0])
     claim(s, "5.5 без первой максимум", r"лежит от (−\d+\.\d+) до −\d+\.\d+, то есть потери",
           st.no_s1.max())
     claim(s, "5.5 без первой минимум", r"лежит от −\d+\.\d+ до (−\d+\.\d+), то есть потери",
@@ -784,16 +834,16 @@ def check_prose(text: str, a: dict) -> None:
     claim(s, "5.5 общая первая минимум", r"разность лежит от (−\d+\.\d+) до", st.global_s1.min())
     claim(s, "5.5 общая первая максимум", r"разность лежит от −\d+\.\d+ до \+(\d+\.\d+)",
           st.global_s1.max())
-    claim(s, "5.5 без третьей максимум", r"почти целиком: от (−\d+\.\d+) до", st.no_s3.max())
-    claim(s, "5.5 без третьей минимум", r"почти целиком: от −\d+\.\d+ до (−\d+\.\d+)", st.no_s3.min())
-    claim(s, "5.5 против лучшей минимум", r"семи, от (−\d+\.\d+) до \+\d+\.\d+, но выигрывает",
+    claim(s, "5.5 без третьей минимум", r"почти точно: от (−\d+\.\d+) до", st.no_s3.min())
+    claim(s, "5.5 без третьей максимум", r"почти точно: от −\d+\.\d+ до \+(\d+\.\d+)", st.no_s3.max())
+    claim(s, "5.5 против лучшей минимум", r"наборах, от \+(\d+\.\d+) до \+\d+\.\d+, но на шести",
           bs.full.min())
-    claim(s, "5.5 против лучшей максимум", r"от −\d+\.\d+ до \+(\d+\.\d+), но выигрывает",
+    claim(s, "5.5 против лучшей максимум", r"наборах, от \+\d+\.\d+ до \+(\d+\.\d+), но на шести",
           bs.full.max())
-    claim(s, "5.5 без первой против лучшей минимум", r"без первой ступени: от (−\d+\.\d+) до",
+    claim(s, "5.5 без первой против лучшей минимум", r"без первой ступени: от \+(\d+\.\d+) до",
           bs.no_s1.min())
     claim(s, "5.5 без первой против лучшей максимум",
-          r"без первой ступени: от −\d+\.\d+ до \+(\d+\.\d+)", bs.no_s1.max())
+          r"без первой ступени: от \+\d+\.\d+ до \+(\d+\.\d+)", bs.no_s1.max())
 
     # счётчики значимости контролей: величины ничтожны, а значимость разная
     cb = a["ccce_boot"]
@@ -813,10 +863,10 @@ def check_prose(text: str, a: dict) -> None:
         [f"lift_{v}_vs_static_auc" for v in VARIANTS]].mean()
     cf.columns = VARIANTS
     st_full = ccce.groupby("dataset").lift_full_vs_static_auc.mean()
-    claim(s55, "5.5 кросс-фит, меньшая потеря",
-          r"на диапазон от (−\d+\.\d+) до −\d+\.\d+", cf.full.max())
     claim(s55, "5.5 кросс-фит, большая потеря",
-          r"на диапазон от −\d+\.\d+ до (−\d+\.\d+)", cf.full.min())
+          r"на диапазон от (−\d+\.\d+) до −\d+\.\d+", cf.full.min())
+    claim(s55, "5.5 кросс-фит, меньшая потеря",
+          r"на диапазон от −\d+\.\d+ до (−\d+\.\d+)", cf.full.max())
     claim(s55, "5.5 кросс-фит, наибольший рост",
           r"наибольший рост потери — (\d+\.\d+)", -(cf.full - st_full).min())
     claim(s55, "5.5 кросс-фит, без первой ступени, минимум",
@@ -835,8 +885,10 @@ def check_prose(text: str, a: dict) -> None:
     br = br.groupby("dataset")[VARIANTS].mean()
     check(int((br.full > 0).sum()) == len(br), "5.5 Брайер, хуже на всех наборах",
           f"хуже на {int((br.full > 0).sum())} из {len(br)}")
-    claim(s55, "5.5 Брайер, минимум", r"на всех семи наборах, от \+(\d+\.\d+) до", br.full.min())
-    claim(s55, "5.5 Брайер, максимум", r"наборах, от \+\d+\.\d+ до \+(\d+\.\d+)", br.full.max())
+    claim(s55, "5.5 Брайер, минимум", r"Брайеру на всех семи наборах, от \+(\d+\.\d+) до",
+          br.full.min())
+    claim(s55, "5.5 Брайер, максимум",
+          r"Брайеру на всех семи наборах, от \+\d+\.\d+ до \+(\d+\.\d+)", br.full.max())
     claim(s55, "5.5 Брайер, без первой ступени, минимум",
           r"нуле: от (−\d+\.\d+) до \+\d+\.\d+ без первой", br.no_s1.min())
     claim(s55, "5.5 Брайер, без первой ступени, максимум",
@@ -858,74 +910,66 @@ def check_prose(text: str, a: dict) -> None:
              gr.loc["ednet", "auc_best_concept"])):
         claim(s23, f"2.3 уровень подробности {pat[:24]}", pat, float(val))
 
-    # --- 5.7: то же на строках-заданиях ---
-    sq = norm(section(text, "5.7 Те же измерения на уровне заданий"))
-    gq = a["gate_q"].groupby(["dataset", "meta_learner"])
-    q_best = gq.lift_gated_vs_best_auc.mean().unstack()
-    q_stack = gq.lift_gated_vs_stack_auc.mean().unstack()
-    c_best = (gate["deep"].groupby(["dataset", "meta_learner"])
-              .lift_gated_vs_best_auc.mean().unstack())
-    SCW, GSCI = "static_concept_weights", "global_stack_concept_intercept"
-    for pat, val in (
-            (r"на Algebra-2005\s*\+(\d+\.\d+) против \+\d+\.\d+", q_best.loc["algebra2005", SCW]),
-            (r"на Algebra-2005\s*\+\d+\.\d+ против \+(\d+\.\d+)", c_best.loc["algebra2005", SCW]),
-            (r"на EdNet-KT1-5k \+(\d+\.\d+) против", q_best.loc["ednet", SCW]),
-            (r"на EdNet-KT1-5k \+\d+\.\d+ против (−\d+\.\d+)", c_best.loc["ednet", SCW]),
-            (r"медианно на \+(\d+\.\d+), тогда как на", q_stack[SCW].median())):
-        claim(sq, f"5.7 {pat[:30]}", pat, float(val))
-    check(int((q_best[SCW] > 0).sum()) == len(q_best), "5.7 взвешивание положительно всюду",
-          f"положительно на {int((q_best[SCW] > 0).sum())} из {len(q_best)}")
-    check(int((q_stack[SCW] > 0).sum()) == len(q_stack),
-          "5.7 взвешивание против надстройки положительно всюду",
-          f"положительно на {int((q_stack[SCW] > 0).sum())} из {len(q_stack)}")
-    gap = (q_best[SCW] - q_best[GSCI]).sort_values()
-    small = gap.drop(["algebra2005", "ednet"])
-    word_claim(sq, "5.7 малый разрыв, число наборов",
-               r"На (\S+) наборах из шести разрыв", len(small))
-    claim(sq, "5.7 малый разрыв, минимум",
-          r"ничтожен — от (−\d+\.\d+) до \+\d+\.\d+", small.min())
-    claim(sq, "5.7 малый разрыв, максимум",
-          r"ничтожен — от −\d+\.\d+ до \+(\d+\.\d+)", small.max())
-    claim(sq, "5.7 разрыв Algebra", r"он равен \+(\d+\.\d+)", gap["algebra2005"])
-    claim(sq, "5.7 разрыв EdNet", r"а на EdNet-KT1-5k \+(\d+\.\d+), то есть", gap["ednet"])
-    cq = a["ccce_q"].groupby("dataset")[[f"lift_{v}_vs_static_auc" for v in VARIANTS]].mean()
-    cq.columns = VARIANTS
-    neg = cq.full[cq.full < 0]
-    word_claim(sq, "5.7 три ступени, отрицательных наборов",
-               r"На (\S+) наборах из шести разность отрицательна", len(neg))
-    claim(sq, "5.7 три ступени, минимум потери", r"отрицательна, от (−\d+\.\d+) до −\d+\.\d+",
-          neg.max())
-    claim(sq, "5.7 три ступени, максимум потери", r"отрицательна, от −\d+\.\d+ до (−\d+\.\d+)",
-          neg.min())
-    claim(sq, "5.7 три ступени, EdNet", r"там схема выигрывает\s*\+(\d+\.\d+)", cq.full["ednet"])
-    claim(sq, "5.7 без первой ступени, минимум", r"на (−\d+\.\d+)…−\d+\.\d+", cq.no_s1.min())
-    claim(sq, "5.7 без первой ступени, максимум", r"на −\d+\.\d+…(−\d+\.\d+)", cq.no_s1.max())
-    claim(sq, "5.7 общая первая ступень, минимум",
-          r"на первой ступени — на (−\d+\.\d+)…\+\d+\.\d+", cq.global_s1.min())
-    claim(sq, "5.7 общая первая ступень, максимум",
-          r"на первой ступени — на −\d+\.\d+…\+(\d+\.\d+)", cq.global_s1.max())
-    claim(sq, "5.7 EdNet площадь без разворота", r"модели там всего (\d+\.\d+)",
-          float(a["gran"].loc["ednet", "auc_best_question"]))
-    # проверка прошивки: там, где разворота нет, два уровня обязаны совпасть
+    # --- 5.7: приложение, уровень пар ---
+    sp = norm(section(text, "5.7 Те же измерения на строках-парах"))
     k = ["dataset", "fold", "meta_learner"]
-    both = (a["gate_q"][k + ["lift_gated_vs_best_auc"]]
-            .merge(gate["deep"][k + ["lift_gated_vs_best_auc"]], on=k,
-                   suffixes=("_q", "_c")))
-    gap = (both.lift_gated_vs_best_auc_q - both.lift_gated_vs_best_auc_c).abs()
-    by_ds = gap.groupby(both.dataset).max()
-    claim(sq, "5.7 совпадение уровней, наборы без разворота",
-          r"наибольшее расхождение по всем ячейкам (\d+\.\d+)",
+    both = (pd.read_csv(ENS / "gating_deep_question.csv")[k + ["lift_gated_vs_best_auc"]]
+            .merge(a["gate_pair"][k + ["lift_gated_vs_best_auc"]], on=k,
+                   suffixes=("_q", "_p")))
+    by_ds = (both.lift_gated_vs_best_auc_q - both.lift_gated_vs_best_auc_p).abs()
+    by_ds = by_ds.groupby(both.dataset).max()
+    claim(sp, "5.7 совпадение, наборы без разворота",
+          r"наибольшее расхождение по всем\s*ячейкам составляет (\d+\.\d+)",
           float(by_ds[["assist2012", "assist2017"]].max()))
-    claim(sq, "5.7 совпадение уровней, Bridge",
-          r"расхождение не\s*превышает (\d+\.\d+)", float(by_ds["bridge2algebra2006"]))
-    claim(sq, "5.7 расхождение при большом развороте",
-          r"расхождение доходит до (\d+\.\d+)", float(by_ds.max()))
-    claim(sq, "5.7 разворот Bridge", r"строк становится больше на (\d+\.\d+) %",
+    claim(sp, "5.7 Bridge, разворот", r"разворот добавляет (\d+\.\d+) %",
           (float(a["gran"].loc["bridge2algebra2006", "expansion"]) - 1) * 100)
-    q_sets = set(a["gate_q"].dataset) | set(a["ccce_q"].dataset)
-    check("assist2015" not in q_sets, "5.7 ASSISTments-2015 исключён",
-          f"в артефактах наборов {len(q_sets)}")
-    check(len(q_sets) == 6, "5.7 шесть наборов", f"в артефактах {len(q_sets)}")
+    claim(sp, "5.7 Bridge, расхождение", r"расхождение не превышает (\d+\.\d+)",
+          float(by_ds["bridge2algebra2006"]))
+    for ds, name, pat in (
+            ("algebra2005", "Algebra", r"Algebra-2005 до (\d+\.\d+)"),
+            ("assist2009", "ASSISTments-2009", r"ASSISTments-2009 до (\d+\.\d+)"),
+            ("ednet", "EdNet", r"EdNet-KT1-5k до (\d+\.\d+)")):
+        claim(sp, f"5.7 расхождение, {name}", pat, float(by_ds[ds]))
+
+    # Сравнение уровней ведётся на шести наборах, где есть оба: у ASSISTments-2015
+    # второго уровня не существует, и включать его в сопоставление нельзя.
+    SCW = "static_concept_weights"
+    six = sorted(set(pd.read_csv(ENS / "gating_deep_question.csv").dataset))
+
+    def _vs_stack(df):
+        d = df[(df.meta_learner == SCW) & (df.dataset.isin(six))]
+        return d.groupby("dataset").lift_gated_vs_stack_auc.mean()
+
+    pair_stack, item_stack = _vs_stack(a["gate_pair"]), _vs_stack(a["gate"]["deep"])
+    word_claim(sp, "5.7 уровень пар, положительных наборов",
+               r"положительно на (\S+) наборах из шести", int((pair_stack > 0).sum()))
+    claim(sp, "5.7 уровень пар, медиана", r"медианно на\s*\+(\d+\.\d+), тогда\s*как",
+          pair_stack.median())
+    claim(sp, "5.7 уровень заданий, медиана",
+          r"на всех шести и медианно на \+(\d+\.\d+)", item_stack.median())
+
+    def _ccce_six(df):
+        return df[df.dataset.isin(six)].groupby("dataset").lift_full_vs_static_auc.mean()
+
+    pair_ccce, item_ccce = _ccce_six(a["ccce_pair"]), _ccce_six(a["ccce"])
+    check(int((pair_ccce < 0).sum()) == len(pair_ccce),
+          "5.7 уровень пар: три ступени проигрывают на всех шести",
+          f"отрицательна на {int((pair_ccce < 0).sum())} из {len(pair_ccce)}")
+    check(int((item_ccce < 0).sum()) == len(item_ccce) - 1,
+          "5.7 уровень заданий: проигрывают на всех, кроме одного",
+          f"отрицательна на {int((item_ccce < 0).sum())} из {len(item_ccce)}")
+    gp = a["gate_pair"].groupby(["dataset", "meta_learner"]).lift_gated_vs_best_auc.mean()
+    gp = gp.unstack()
+    gap_pair = (gp[SCW] - gp["global_stack_concept_intercept"]).abs().max()
+    gi = a["gate"]["deep"].groupby(["dataset", "meta_learner"]).lift_gated_vs_best_auc.mean()
+    gi = gi.unstack()
+    gap_item = (gi[SCW] - gi["global_stack_concept_intercept"]).max()
+    claim(sp, "5.7 разрыв на уровне пар", r"не превышает (\d+\.\d+) ни на одном", gap_pair)
+    claim(sp, "5.7 разрыв на уровне заданий", r"разрыв доходит до (\d+\.\d+)", gap_item)
+    claim(sp, "5.7 EdNet площадь, задания", r"поднимается с (\d+\.\d+) до \d+\.\d+",
+          float(a["gran"].loc["ednet", "auc_best_question"]))
+    claim(sp, "5.7 EdNet площадь, пары", r"поднимается с \d+\.\d+ до (\d+\.\d+)",
+          float(a["gran"].loc["ednet", "auc_best_concept"]))
 
     s = norm(section(text, "5.6 Калибровка"))
     ge = gate["deep"][gate["deep"].meta_learner == "static_concept_weights"]
@@ -941,13 +985,12 @@ def check_prose(text: str, a: dict) -> None:
           f"в артефакте {int((se > 0).sum())}")
     claim(s, "5.6 взвешивание максимум", r"наборах, от (−\d+\.\d+) до −\d+\.\d+", ge.max())
     claim(s, "5.6 взвешивание минимум", r"наборах, от −\d+\.\d+ до (−\d+\.\d+)", ge.min())
-    claim(s, "5.6 полная минимум", r"наборах: от \+(\d+\.\d+) до", ce.full.min())
-    claim(s, "5.6 полная максимум", r"наборах: от \+\d+\.\d+ до \+(\d+\.\d+)", ce.full.max())
+    claim(s, "5.6 полная минимум", r"взвешивания, от \+(\d+\.\d+) до", ce.full.min())
+    claim(s, "5.6 полная максимум", r"взвешивания, от \+\d+\.\d+ до \+(\d+\.\d+)", ce.full.max())
     both = pd.concat([ce.no_s1, ce.global_s1])
-    claim(s, "5.6 варианты минимум", r"в пределах от (−\d+\.\d+) до \+\d+\.\d+, то есть от простого",
+    claim(s, "5.6 варианты минимум", r"в пределах от (−\d+\.\d+) до \+\d+\.\d+ — на порядок",
           both.min())
-    claim(s, "5.6 варианты максимум", r"от −\d+\.\d+ до \+(\d+\.\d+), то есть от простого",
-          both.max())
+    claim(s, "5.6 варианты максимум", r"от −\d+\.\d+ до \+(\d+\.\d+) — на порядок", both.max())
 
     sp = a["spread"].groupby(["dataset", "subset"])[["best_std", "ensemble_std"]].mean()
     claim(s, "5.6 разброс ASSISTments-2017 до", r"с (\d+\.\d+) до \d+\.\d+ на ASSISTments-2017",
@@ -972,8 +1015,14 @@ def check_prose(text: str, a: dict) -> None:
 
     s5_3 = norm(section(text, "5.3 Условное взвешивание и вклад свободного члена"))
     claim(s5_3, "5.3 подпись рис. 2 / расхождение",
-          r"Расхождение точек не превышает (\d+\.\d+)", diff.abs().max())
-    check("Fig. 2. Full weighting" in s5_3, "5.3 подпись рис. 2 на английском")
+          r"наибольшее расхождение равно (\d+\.\d+)", _deep_diff.abs().max())
+    cls_gap = (a["gate"]["classical"]
+               .groupby(["dataset", "meta_learner"]).lift_gated_vs_best_auc.mean()
+               .unstack())
+    claim(s5_3, "5.3 подпись рис. 2 / простые",
+          r"нигде не превышает (\d+\.\d+)",
+          (cls_gap["static_concept_weights"]
+           - cls_gap["global_stack_concept_intercept"]).abs().max())
     s5_5 = norm(section(text, "5.5 Трёхступенчатый ансамбль"))
     check("Рис. 3. Четыре варианта" in s5_5, "5.5 подпись рис. 3")
     check("Fig. 3. Four variants" in s5_5, "5.5 подпись рис. 3 на английском")
@@ -1027,13 +1076,14 @@ def check_abstracts(text: str, a: dict) -> None:
     claim(en, "аннотация англ / надстройка минимум", r"cell, by (\d+\.\d+) to", learned.min().min())
     claim(en, "аннотация англ / надстройка максимум", r"cell, by \d+\.\d+ to (\d+\.\d+)",
           learned.max().max())
-    claim(ru, "аннотация рус / схема минимум", r"наборах, от (\d+\.\d+) до \d+\.\d+ площади",
-          -st.full.max())
-    claim(ru, "аннотация рус / схема максимум", r"наборах, от \d+\.\d+ до (\d+\.\d+) площади",
-          -st.full.min())
-    claim(en, "аннотация англ / схема минимум", r"datasets, by (\d+\.\d+) to", -st.full.max())
-    claim(en, "аннотация англ / схема максимум", r"datasets, by \d+\.\d+ to (\d+\.\d+)",
-          -st.full.min())
+    neg = st.full[st.full < 0]
+    claim(ru, "аннотация рус / схема минимум", r"семи, от (\d+\.\d+) до \d+\.\d+ площади",
+          -neg.max())
+    claim(ru, "аннотация рус / схема максимум", r"семи, от \d+\.\d+ до (\d+\.\d+) площади",
+          -neg.min())
+    claim(en, "аннотация англ / схема минимум", r"of seven, by (\d+\.\d+) to", -neg.max())
+    claim(en, "аннотация англ / схема максимум", r"of seven, by \d+\.\d+ to (\d+\.\d+)",
+          -neg.min())
 
     n_ru, n_en = len(ru.split()), len(en.split())
     # журнал требует 200-300 слов от обеих аннотаций
@@ -1175,7 +1225,7 @@ def main() -> int:
     check_table9(text, a)
     check_table10(text, a)
     check_crossfit(text, a)
-    check_question_tables(text, a)
+    check_pair_tables(text, a)
     check_prose(text, a)
     check_abstracts(text, a)
     check_citations(text)

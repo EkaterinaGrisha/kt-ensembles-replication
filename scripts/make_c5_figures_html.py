@@ -165,6 +165,14 @@ def signed(v: float, nd: int = 4) -> str:
 
 
 # ------------------------------------------------------------------- числа
+def item_level(question: pd.DataFrame, concept: pd.DataFrame) -> pd.DataFrame:
+    """Строки уровня заданий по всем семи наборам — как в сборщике таблиц."""
+    extra = concept[concept.dataset == "assist2015"]
+    if "assist2015" in set(question.dataset) or extra.empty:
+        sys.exit("ФАТАЛЬНО: ASSISTments-2015 не там, где ожидался")
+    return pd.concat([question, extra], ignore_index=True)
+
+
 def equal_mass_bins(y: np.ndarray, p: np.ndarray, n_bins: int = BINS):
     """Точки диаграммы надёжности: группы равного размера, как и в ошибке калибровки."""
     order = np.argsort(p, kind="mergesort")
@@ -306,10 +314,10 @@ def figure2(gate: pd.DataFrame) -> tuple[str, int]:
         return pad_l + (v - lo) / (hi - lo) * axis_w
 
     parts = [rect(0, 0, W, height, fill="#FFFFFF")]
-    parts.append(bilingual(0, 20, "Рис. 2. Весь вклад условного взвешивания даёт свободный "
-                           "член",
-                           "Fig. 2. The whole gain of conditional weighting comes from the "
-                           "intercept", size=11, weight="600"))
+    parts.append(bilingual(0, 20, "Рис. 2. Поправка на тему берёт бо́льшую часть прироста, "
+                           "но не всю",
+                           "Fig. 2. The per-topic intercept takes most of the gain, but not "
+                           "all of it", size=11, weight="600"))
     parts.append(text(0, 56, "Глубокие модели; разность площади под кривой относительно "
                       "лучшей одиночной модели", size=9, fill=MUTED))
     parts.append(text(0, 67, "Deep models; difference in the area under the curve against "
@@ -432,8 +440,13 @@ def main() -> int:
 
     boot = pd.read_csv(ENS / "cluster_bootstrap_simple_ensembles.csv")
     spread = pd.read_csv(ENS / "prediction_spread.csv")
-    gate = pd.read_csv(ENS / "gating_deep.csv")
-    ccce = pd.read_csv(ENS / "ccce_deep.csv")
+    # Рисунки идут на том же уровне подробности, что и таблицы: строки-задания,
+    # а для ASSISTments-2015 — его прогон на парах, который для него и есть
+    # прогон на заданиях (раздел 2.3).
+    gate = item_level(pd.read_csv(ENS / "gating_deep_question.csv"),
+                      pd.read_csv(ENS / "gating_deep.csv"))
+    ccce = item_level(pd.read_csv(ENS / "ccce_deep_question.csv"),
+                      pd.read_csv(ENS / "ccce_deep.csv"))
     points = reliability_points()
 
     for name, (body, height) in (

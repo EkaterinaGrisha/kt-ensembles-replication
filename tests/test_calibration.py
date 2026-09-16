@@ -1,7 +1,10 @@
 """Unit tests for post-hoc calibration methods."""
 from __future__ import annotations
 
+import importlib
+
 import numpy as np
+import pytest
 
 from ktx.calibration import (
     IsotonicCalibration,
@@ -28,6 +31,28 @@ def _overconfident(n=4000, seed=0):
     return vp, vy, tp, ty
 
 
+def _usable(module: str) -> bool:
+    """Доступна ли необязательная зависимость.
+
+    Проверяется ввозом, а не поиском файла: `find_spec` отвечает только на
+    вопрос «лежит ли пакет», и сломанная установка его проходит, а потом падает
+    посреди проверки. Для отсутствующего пакета ввоз обрывается сразу, поэтому
+    лишнего времени это не стоит.
+    """
+    try:
+        importlib.import_module(module)
+    except Exception:
+        return False
+    return True
+
+
+needs_netcal = pytest.mark.skipif(
+    not _usable("netcal"),
+    reason="проверка меряет ошибку калибровки через netcal; "
+           "поставьте ktx[calibration]")
+
+
+@needs_netcal
 def test_temperature_reduces_ece_on_heldout():
     vp, vy, tp, ty = _overconfident()
     ece_before = compute_metrics(ty, tp).ece
@@ -46,6 +71,7 @@ def test_temperature_near_one_for_calibrated_input():
     assert 0.8 < cal.T_ < 1.25                   # already calibrated ⇒ T≈1
 
 
+@needs_netcal
 def test_platt_and_isotonic_improve_heldout_ece():
     vp, vy, tp, ty = _overconfident(seed=1)
     ece_before = compute_metrics(ty, tp).ece

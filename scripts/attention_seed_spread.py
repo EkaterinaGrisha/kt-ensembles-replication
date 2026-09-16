@@ -54,22 +54,24 @@ def main() -> int:
     ap.add_argument("--datasets", nargs="+", default=DATASETS)
     ap.add_argument("--folds", nargs="+", type=int, default=FOLDS)
     ap.add_argument("--seeds", nargs="+", type=int, default=SEEDS)
-    ap.add_argument("--out", type=Path, default=OUT)
+    ap.add_argument("--granularity", choices=["concept", "question"], default="concept",
+                    help="уровень подробности строки: пара «задание, компонент» или задание")
+    ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args()
+    if args.out is None:
+        suffix = "" if args.granularity == "concept" else "_question"
+        args.out = OUT.with_name(f"{OUT.stem}{suffix}{OUT.suffix}")
 
     rows = []
     for dataset in args.datasets:
         for fold in args.folds:
-            got = deep_inputs.load(dataset, fold, DEEP, "concept")
-            if got is None:
-                continue
             try:
-                vconc = concept_ids_for_valid(dataset, valid_fold=fold)
-                tconc = concept_ids_for_test(dataset)
+                got = deep_inputs.load_cell(dataset, fold, DEEP, args.granularity)
             except FileNotFoundError:
                 continue
-            if vconc.size != got.valid_y.size or tconc.size != got.test_y.size:
+            if got is None:
                 continue
+            vconc, tconc = got.valid_concepts, got.test_concepts
             static = StaticConceptWeights(n_min=30).fit(
                 got.valid_matrix, got.valid_y, valid_concepts=vconc).predict(
                 got.test_matrix, test_concepts=tconc)
@@ -85,7 +87,8 @@ def main() -> int:
                                      valid_concepts=vconc).predict(
                         got.test_matrix, test_concepts=tconc)
                     rows.append({
-                        "dataset": dataset, "fold": fold, "scheme": scheme,
+                        "dataset": dataset, "fold": fold,
+                        "granularity": args.granularity, "scheme": scheme,
                         "seed": seed,
                         "auc": auc_metric(got.test_y, pred),
                         "static_auc": auc_static,

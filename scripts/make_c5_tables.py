@@ -58,14 +58,17 @@ MOE_MPS = ENS / "moe_deep.csv"
 CCCE = ENS / "ccce_deep.csv"
 CCCE_CF = ENS / "ccce_crossfit_deep.csv"   # первая ступень обучена вне блока
 CCCE_BOOT = ENS / "cluster_bootstrap_ccce.csv"
-# То же на уровне заданий: строка — задание, а не пара «задание, компонент».
+# Основной уровень — строки-задания. Прогон охватывает шесть наборов; седьмой,
+# ASSISTments-2015, идентификаторов заданий не имеет вовсе (num_q = 0), задание и
+# компонент знания там одно и то же, и прогон на строках-парах для него и есть
+# прогон на строках-заданиях.
 GATING_Q = ENS / "gating_deep_question.csv"
 GATING_Q_BOOT = ENS / "cluster_bootstrap_gating_question.csv"
 CCCE_Q = ENS / "ccce_deep_question.csv"
 CCCE_Q_BOOT = ENS / "cluster_bootstrap_ccce_question.csv"
-# Шесть наборов: у ASSISTments-2015 нет идентификаторов заданий.
-ORDER_Q = ["algebra2005", "assist2009", "assist2012",
-           "assist2017", "bridge2algebra2006", "ednet"]
+CCCE_CF_Q = ENS / "ccce_crossfit_deep_question.csv"
+ATTN_MOE_Q_BOOT = ENS / "cluster_bootstrap_attention_moe_question.csv"
+CONCEPT_ONLY = "assist2015"
 
 ORDER = ["algebra2005", "assist2009", "assist2012", "assist2015",
          "assist2017", "bridge2algebra2006", "ednet"]
@@ -115,6 +118,29 @@ def load(path) -> pd.DataFrame:
     if not path.exists():
         sys.exit(f"ФАТАЛЬНО: нет артефакта {path}")
     return pd.read_csv(path)
+
+
+def item_level(question: pd.DataFrame, concept: pd.DataFrame, what: str) -> pd.DataFrame:
+    """Строки уровня заданий по всем семи наборам.
+
+    Шесть наборов приходят из прогона на строках-заданиях. У ASSISTments-2015
+    заданий как отдельной сущности нет: в конфигурации предобработки num_q = 0, в
+    последовательностях нет ни столбца заданий, ни признака повтора, — поэтому его
+    прогон на строках-парах и есть прогон на строках-заданиях, и его строки
+    берутся оттуда. Проверяется и то, и другое: набор обязан отсутствовать в одном
+    источнике и присутствовать в другом.
+    """
+    if CONCEPT_ONLY in set(question.dataset):
+        sys.exit(f"ФАТАЛЬНО: {what}: {CONCEPT_ONLY} есть в прогоне на заданиях, "
+                 f"хотя заданий у него нет")
+    extra = concept[concept.dataset == CONCEPT_ONLY]
+    if extra.empty:
+        sys.exit(f"ФАТАЛЬНО: {what}: нет строк {CONCEPT_ONLY} в прогоне на парах")
+    merged = pd.concat([question, extra], ignore_index=True)
+    if set(merged.dataset) != set(ORDER):
+        sys.exit(f"ФАТАЛЬНО: {what}: наборов {sorted(set(merged.dataset))}, "
+                 f"ожидались все семь")
+    return merged
 
 
 def load_if_ready(*paths) -> list[pd.DataFrame] | None:
@@ -244,9 +270,10 @@ def table_gating(points: dict, boot: dict, number: int) -> str:
            f"площади под кривой относительно лучшей одиночной модели, среднее по пяти "
            f"разбиениям, в скобках — число разбиений со значимой разностью после "
            f"поправки Холма. Столбец «своб. член» — вариант, в котором наклоны общие для "
-           f"всех компонентов знания, а свободный член свой у каждого. У глубоких "
-           f"моделей строка — пара «задание, компонент знания», у простых — задание; "
-           f"числа двух семейств между собой не сравниваются (раздел 2.3).", ""]
+           f"всех компонентов знания, а свободный член свой у каждого. Строка — "
+           f"задание в обоих семействах моделей; у ASSISTments-2015 заданий как "
+           f"отдельной сущности нет, и его строки — компоненты знания, что для него "
+           f"то же самое (раздел 2.3).", ""]
     cells = " | ".join(f"{GATE_RU[g]:>{width}}" for g in GATES)
     rule = " | ".join(["-" * (width - 1) + ":"] * len(GATES))
     out += [f"| {'набор':<{W}} | семейство | {cells} |",
@@ -399,20 +426,20 @@ def table_crossfit(crossfit: pd.DataFrame, number: int) -> str:
     return "\n".join(out)
 
 
-def table_question_gating(points: pd.DataFrame, boot: pd.DataFrame, number: int) -> str:
-    """Условное взвешивание на уровне заданий: те же три вентиля, шесть наборов."""
+def table_pair_gating(points: pd.DataFrame, boot: pd.DataFrame, number: int) -> str:
+    """Приложение: условное взвешивание на строках-парах, как считалось раньше."""
     width = max(len(v) for v in GATE_RU.values()) + 3
-    out = [f"Табл. {number}. Условное взвешивание на строках-заданиях, семейство "
-           f"глубоких моделей: разность площади под кривой относительно лучшей одиночной "
-           f"модели, среднее по пяти разбиениям, в скобках — число разбиений со значимой "
-           f"разностью после поправки Холма. ASSISTments-2015 выпадает: у него нет "
-           f"идентификаторов заданий, и уровень заданий совпадает с уровнем пар. "
-           f"С таблицей 6 эти числа не сравниваются: там строка — пара "
-           f"«задание, компонент знания».", ""]
+    out = [f"Табл. {number}. Условное взвешивание на строках-парах «задание, компонент "
+           f"знания», семейство глубоких моделей: разность площади под кривой "
+           f"относительно лучшей одиночной модели, среднее по пяти разбиениям, в "
+           f"скобках — число разбиений со значимой разностью после поправки Холма. "
+           f"Соответствует таблице 6, посчитанной на строках-заданиях. На четырёх "
+           f"наборах из семи два уровня совпадают, потому что у задания там один "
+           f"компонент знания.", ""]
     delta = points.groupby(["dataset", "meta_learner"]).lift_gated_vs_best_auc.mean()
     sig = sig_counts(boot, ["dataset", "meta_learner"], "auc_p_vs_best_reject_holm")
     out += head([GATE_RU[g] for g in GATES], width)
-    for ds in ORDER_Q:
+    for ds in ORDER:
         row = []
         for g in GATES:
             n = sig.get((ds, g), "—/5").split("/")[0]
@@ -421,19 +448,19 @@ def table_question_gating(points: pd.DataFrame, boot: pd.DataFrame, number: int)
     return "\n".join(out)
 
 
-def table_question_ccce(points: pd.DataFrame, boot: pd.DataFrame, number: int) -> str:
-    """Трёхступенчатая схема на уровне заданий, против взвешивания."""
+def table_pair_ccce(points: pd.DataFrame, boot: pd.DataFrame, number: int) -> str:
+    """Приложение: трёхступенчатая схема на строках-парах, против взвешивания."""
     width = max(len(v) for v in VARIANT_RU.values()) + 3
-    out = [f"Табл. {number}. Трёхступенчатый ансамбль на строках-заданиях, семейство "
-           f"глубоких моделей: разность площади под кривой относительно взвешивания по "
-           f"компонентам знания, среднее по пяти разбиениям, в скобках — число разбиений "
-           f"со значимой разностью после поправки Холма. ASSISTments-2015 выпадает по "
-           f"той же причине, что и в таблице 12.", ""]
+    out = [f"Табл. {number}. Трёхступенчатый ансамбль на строках-парах «задание, "
+           f"компонент знания», семейство глубоких моделей: разность площади под кривой "
+           f"относительно взвешивания по компонентам знания, среднее по пяти разбиениям, "
+           f"в скобках — число разбиений со значимой разностью после поправки Холма. "
+           f"Соответствует таблице 9, посчитанной на строках-заданиях.", ""]
     delta = points.groupby("dataset")[[f"lift_{v}_vs_static_auc" for v in VARIANTS]].mean()
     delta.columns = VARIANTS
     sig = sig_counts(boot, ["dataset", "variant"], "auc_p_vs_static_reject_holm")
     out += head([VARIANT_RU[v] for v in VARIANTS], width)
-    for ds in ORDER_Q:
+    for ds in ORDER:
         row = []
         for v in VARIANTS:
             n = sig.get((ds, v), "—/5").split("/")[0]
@@ -463,10 +490,8 @@ def table_calibration(simple: pd.DataFrame, stack: pd.DataFrame, gate: dict,
            f"скобках — число разбиений со значимой разностью после поправки Холма. "
            f"Отрицательное значение означает, что ансамбль калиброван лучше. Последний "
            f"столбец — трёхступенчатая схема относительно взвешивания по компонентам "
-           f"знания. Надстройка — градиентный бустинг. Уровень подробности строки в "
-           f"столбцах разный: первые два посчитаны на строках-заданиях, остальные три — "
-           f"на строках-парах «задание, компонент знания» (раздел 2.3), поэтому "
-           f"сравнивать между собой можно только столбцы одного уровня.", ""]
+           f"знания. Надстройка — градиентный бустинг. Все столбцы посчитаны на "
+           f"строках-заданиях.", ""]
     cells = " | ".join(f"{c:>{width}}" for c in cols)
     rule = " | ".join(["-" * (width - 1) + ":"] * len(cols))
     out += [f"| {'набор':<{W}} | {cells} |", f"| {'-' * W} | {rule} |"]
@@ -793,10 +818,20 @@ def main() -> int:
     comp = load(COMPONENTS)
     simple = load(SIMPLE_BOOT)
     stack = load(STACK_BOOT)
-    gate = {k: load(v) for k, v in GATING.items()}
-    gate_boot = {k: load(v) for k, v in GATING_BOOT.items()}
-    attn_moe = load(ATTN_MOE_BOOT)
-    ccce, ccce_boot = load(CCCE), load(CCCE_BOOT)
+    # Уровень пар нужен дважды: из него берётся ASSISTments-2015 для основных
+    # таблиц и из него же целиком собирается приложение.
+    gate_pair, gate_pair_boot = load(GATING["deep"]), load(GATING_BOOT["deep"])
+    ccce_pair, ccce_pair_boot = load(CCCE), load(CCCE_BOOT)
+    gate = {"deep": item_level(load(GATING_Q), gate_pair, "взвешивание"),
+            "classical": load(GATING["classical"])}
+    gate_boot = {"deep": item_level(load(GATING_Q_BOOT), gate_pair_boot,
+                                    "взвешивание, бутстрап"),
+                 "classical": load(GATING_BOOT["classical"])}
+    attn_moe = item_level(load(ATTN_MOE_Q_BOOT), load(ATTN_MOE_BOOT),
+                          "внимание и смесь")
+    ccce = item_level(load(CCCE_Q), ccce_pair, "три ступени")
+    ccce_boot = item_level(load(CCCE_Q_BOOT), ccce_pair_boot, "три ступени, бутстрап")
+    crossfit = item_level(load(CCCE_CF_Q), load(CCCE_CF), "кросс-фит")
 
     tables = {
         1: table_datasets(simple),
@@ -809,12 +844,10 @@ def main() -> int:
         8: table_attention(attn_moe, 8),
         9: table_ccce(ccce, ccce_boot, 9),
         10: table_calibration(simple, stack, gate, ccce, ccce_boot, gate_boot, 10),
-        11: table_crossfit(load(CCCE_CF), 11),
+        11: table_crossfit(crossfit, 11),
+        12: table_pair_gating(gate_pair, gate_pair_boot, 12),
+        13: table_pair_ccce(ccce_pair, ccce_pair_boot, 13),
     }
-    if (q := load_if_ready(GATING_Q, GATING_Q_BOOT)) is not None:
-        tables[12] = table_question_gating(q[0], q[1], 12)
-    if (q := load_if_ready(CCCE_Q, CCCE_Q_BOOT)) is not None:
-        tables[13] = table_question_ccce(q[0], q[1], 13)
     if args.into:
         n = splice(args.into, tables)
         print(f"{args.into}: подставлено таблиц {n}")

@@ -2,7 +2,7 @@
 
 Each calibrator is fit on a *held-out* set (validation-fold model outputs + labels) and
 applied to the test outputs — never fit and evaluated on the same data. This is the
-canonical protocol; see notes/08 for the experimental design.
+canonical protocol.
 
 Methods:
 - ``PlattScaling``    — 1-D logistic regression on the logit of p (Platt 1999).

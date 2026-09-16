@@ -104,27 +104,28 @@ def _synth(n=2000, k=3, seed=0):
     return y, a, b, groups
 
 
-def test_paired_bootstrap_fast_matches_reference_in_distribution():
-    """The two implementations use different RNG streams so bit-for-bit
-    equality is not expected, but the CI + p should agree closely with
-    enough resamples."""
+def test_paired_bootstrap_fast_matches_reference():
+    """The two implementations agree to machine epsilon, not merely in
+    distribution.
+
+    Both draw from ``default_rng(seed)`` in the same order, so the resamples
+    are the same resamples; only the order of summation inside the metric
+    differs. The tolerances below are therefore 1e-12, not a fraction of the
+    interval width: a loose bound here would let a genuine divergence of the
+    random streams pass as Monte-Carlo noise, which is exactly the claim the
+    module docstring makes and this test is supposed to guard.
+    """
     y, a, b, g = _synth(n=2000)
     ref = paired_bootstrap(y, a, b, auc_metric, n_boot=1000,
                             groups=g, seed=0, metric_name="auc")
     fast = paired_bootstrap_fast(y, a, b, auc_metric_fast, n_boot=1000,
                                   groups=g, seed=0, metric_name="auc")
-    # Observed diff is deterministic (uses full sample) — must match exactly
-    assert fast.diff == pytest.approx(ref.diff, abs=1e-10)
-    # Value_a / value_b likewise deterministic
-    assert fast.value_a == pytest.approx(ref.value_a, abs=1e-10)
-    assert fast.value_b == pytest.approx(ref.value_b, abs=1e-10)
-    # CI + p at MC noise floor (n_boot=1000): expect agreement within a few
-    # percent of the CI width.
-    ci_width = ref.ci_high - ref.ci_low
-    assert abs(fast.ci_low - ref.ci_low) < 0.15 * ci_width
-    assert abs(fast.ci_high - ref.ci_high) < 0.15 * ci_width
-    # p-value ordering (both significant or both n.s. at α=0.05)
-    assert (fast.p_value < 0.05) == (ref.p_value < 0.05)
+    assert fast.diff == pytest.approx(ref.diff, abs=1e-12)
+    assert fast.value_a == pytest.approx(ref.value_a, abs=1e-12)
+    assert fast.value_b == pytest.approx(ref.value_b, abs=1e-12)
+    assert fast.ci_low == pytest.approx(ref.ci_low, abs=1e-12)
+    assert fast.ci_high == pytest.approx(ref.ci_high, abs=1e-12)
+    assert fast.p_value == pytest.approx(ref.p_value, abs=1e-12)
 
 
 def test_paired_bootstrap_fast_returns_ComparisonResult():
