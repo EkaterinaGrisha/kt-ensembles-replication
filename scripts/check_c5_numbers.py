@@ -469,6 +469,49 @@ def check_table10(text: str, a: dict) -> None:
                       f"в тексте {m.group(2)}, в артефакте {sig}")
 
 
+def check_captions(text: str) -> None:
+    """Подписи таблиц в рукописи совпадают с теми, что печатает сборщик.
+
+    Сборщик подставляет в рукопись только строки таблиц, а подпись не трогает:
+    иначе он затирал бы ручную правку. Значит подпись может разойтись с тем, что
+    на самом деле посчитано, и один раз уже разошлась — таблица 6 продолжала
+    обещать разные уровни подробности у двух семейств моделей спустя пересчёт,
+    после которого уровень стал общим.
+    """
+    from scripts.make_c5_tables import main as build  # noqa: WPS433
+    import contextlib
+    import io
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        argv = sys.argv[:]
+        sys.argv = ["make_c5_tables"]
+        try:
+            build()
+        finally:
+            sys.argv = argv
+    built = {}
+    for block in buf.getvalue().split("\n\n"):
+        head = block.strip().split("\n")[0]
+        m = re.match(r"Табл\. (\d+)\. (.*)", head, re.S)
+        if m:
+            built[int(m.group(1))] = " ".join(m.group(2).split())
+    check(bool(built), "подписи / сборщик что-то напечатал", "вывод пуст")
+    for number, expected in sorted(built.items()):
+        m = re.search(rf"\*\*Табл\. {number}\.\*\* (.+?)\n\n", text, re.S)
+        got = " ".join(m.group(1).split()) if m else None
+        check(got == expected, f"подпись таблицы {number}",
+              "в рукописи нет" if got is None
+              else f"расходится со сборщиком начиная со слова "
+                   f"{_first_diff(got, expected)!r}")
+
+
+def _first_diff(a: str, b: str) -> str:
+    for x, y in zip(a.split(), b.split()):
+        if x != y:
+            return y
+    return (b.split() or [""])[len(a.split()):][:1][0] if len(b.split()) > len(a.split()) else ""
+
+
 def check_pair_tables(text: str, a: dict) -> None:
     """Таблицы 12 и 13: приложение, те же измерения на строках-парах."""
     rows = md_table(text, "**Табл. 12.**")
@@ -1226,6 +1269,7 @@ def main() -> int:
     check_table10(text, a)
     check_crossfit(text, a)
     check_pair_tables(text, a)
+    check_captions(text)
     check_prose(text, a)
     check_abstracts(text, a)
     check_citations(text)
