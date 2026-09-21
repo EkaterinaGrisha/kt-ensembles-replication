@@ -1170,6 +1170,26 @@ def check_citations(text: str) -> None:
           f"в тексте {sorted(set(mentioned))}, в списке {listed}")
     check(len(listed) >= 18, "литература / не меньше восемнадцати источников",
           f"{len(listed)}")
+
+    # Требования шаблона журнала к составу списка. Они проверяются здесь, а не
+    # глазами, потому что список меняется при каждой правке текста, а условие
+    # про свежесть держится на грани: одна снятая свежая ссылка ломает его.
+    entries = re.findall(r"^\[\d+\]\.\s+(.*?)(?=\n\n\[|\n\n---|\Z)", bib, re.S | re.M)
+    NOT_ARTICLE = ("Available at:", "data repository", "Educational data mining challenge")
+    articles, recent = [], []
+    for e in entries:
+        flat = " ".join(e.split())
+        if any(k in flat for k in NOT_ARTICLE):
+            continue
+        articles.append(flat)
+        years = [int(y) for y in re.findall(r"\b(19[89]\d|20[0-2]\d)\b", flat)]
+        if years and max(years) >= 2021:
+            recent.append(flat)
+    check(len(articles) > 20, "литература / больше двадцати научных статей",
+          f"статей {len(articles)} из {len(entries)} позиций")
+    share = len(recent) / max(len(articles), 1)
+    check(share >= 0.5, "литература / половина статей за последние пять лет",
+          f"свежих {len(recent)} из {len(articles)}, это {share:.0%}")
     own = len([1 for line in bib.split("\n") if "репозитори" in line.lower()])
     check(own / max(len(listed), 1) <= 0.3, "литература / самоцитирование не больше 30 %",
           f"своих {own} из {len(listed)}")
@@ -1181,6 +1201,18 @@ FORBIDDEN = [
     r"rq3_draft", r"\.csv\b", r"\bv[24]\b", r"CCCE", r"gating_deep",
     r"\bШ\d+\b", r"pyKT `", r"артефакт",
 ]
+
+
+def check_unread(text: str) -> None:
+    """В тексте не осталось мест, которые ждут чтения источника.
+
+    Две работы попали в список по метаданным издателя, но их содержание не
+    прочитано, и утверждать о нём нечего. Пока метка стоит, рукопись не готова:
+    без этой проверки пропуск тихо уедет в вёрстку.
+    """
+    marks = [m.start() for m in re.finditer("⟦ПРОЧИТАТЬ⟧", text)]
+    check(not marks, "текст / нет непрочитанных источников",
+          f"осталось мест: {len(marks)}")
 
 
 def check_hygiene(text: str) -> None:
@@ -1273,6 +1305,7 @@ def main() -> int:
     check_prose(text, a)
     check_abstracts(text, a)
     check_citations(text)
+    check_unread(text)
     check_hygiene(text)
 
     bad = [r for r in results if not r[0]]
