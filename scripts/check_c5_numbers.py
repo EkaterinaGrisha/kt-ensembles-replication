@@ -1128,6 +1128,39 @@ def check_abstracts(text: str, a: dict) -> None:
     claim(en, "аннотация англ / схема максимум", r"of seven, by \d+\.\d+ to (\d+\.\d+)",
           -neg.min())
 
+    # Медиана взвешивания и разрыв абляции: обе величины уже один раз отстали от
+    # тела статьи. Аннотация несла медиану уровня пар и утверждала, что поправка
+    # объясняет прирост «целиком», тогда как раздел 5.3, раздел 6.2 и подпись к
+    # рисунку 2 говорят обратное. Числа берутся из тех же артефактов, что и текст.
+    SCW, GSCI = "static_concept_weights", "global_stack_concept_intercept"
+    for key, name, pat_ru, pat_en in (
+            ("classical", "простые",
+             r"медианно\s*(\d+\.\d+) у простых", r"(\d+\.\d+) for the simple models"),
+            ("deep", "глубокие",
+             r"и (\d+\.\d+) у глубоких", r"and (\d+\.\d+) for\s*the deep ones")):
+        g = a["gate"][key]
+        med = g[g.meta_learner == SCW].groupby("dataset").lift_gated_vs_stack_auc.mean().median()
+        claim(ru, f"аннотация рус / медиана взвешивания, {name}", pat_ru, med)
+        claim(en, f"аннотация англ / медиана взвешивания, {name}", pat_en, med)
+    gaps = {}
+    for key in ("classical", "deep"):
+        g = a["gate"][key].groupby(["dataset", "meta_learner"]).lift_gated_vs_best_auc.mean().unstack()
+        gaps[key] = g[SCW] - g[GSCI]
+    claim(ru, "аннотация рус / разрыв абляции у простых",
+          r"не более чем на (\d+\.\d+) у простых", gaps["classical"].abs().max())
+    claim(en, "аннотация англ / разрыв абляции у простых",
+          r"by no more than (\d+\.\d+)", gaps["classical"].abs().max())
+    big = gaps["deep"].abs().nlargest(2).sort_values()
+    for i, (pat_ru, pat_en) in enumerate((
+            (r"добавляют сверх поправки (\d+\.\d+) и", r"separate slopes add (\d+\.\d+) and"),
+            (r"сверх поправки \d+\.\d+ и (\d+\.\d+)", r"slopes add \d+\.\d+ and (\d+\.\d+)"))):
+        claim(ru, f"аннотация рус / разрыв у глубоких {i + 1}", pat_ru, gaps["deep"][big.index[i]])
+        claim(en, f"аннотация англ / разрыв у глубоких {i + 1}", pat_en, gaps["deep"][big.index[i]])
+    for text_, name in ((ru, "рус"), (en, "англ")):
+        check("целиком объясняется" not in text_ and "is explained by one of its parts" not in text_,
+              f"аннотация {name} / абляция не подана как безусловная",
+              "сказано «целиком», тогда как правило не всеобщее (п. 5.3)")
+
     n_ru, n_en = len(ru.split()), len(en.split())
     # журнал требует 200-300 слов от обеих аннотаций
     check(200 <= n_ru <= 300, "аннотация рус / длина", f"{n_ru} слов, нужно 200-300")
