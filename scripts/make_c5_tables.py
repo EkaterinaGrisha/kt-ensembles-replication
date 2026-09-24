@@ -4,7 +4,7 @@
 набор: после пересчёта ансамблей 1 сентября колонка глубоких моделей разошлась с
 артефактом во всех семи ячейках, и на ASSISTments-2017 знак оказался
 противоположным. Сценарий печатает таблицы в том виде, в каком они идут в
-рукопись, чтобы вставка была механической, и заодно считает величины, на которые
+статью, чтобы вставка была механической, и заодно считает величины, на которые
 ссылается проза.
 
 Все разности — доли площади под кривой или доли ошибки калибровки, как в
@@ -17,14 +17,12 @@
 поправки доля значимых ячеек завышена. Для внимания и разреженной смеси
 бутстрапа нет, и значимость для них не приводится.
 
-Режим `--into` подставляет свежие таблицы прямо в рукопись: находит «**Табл. N.**»
-и заменяет идущие за ней строки таблицы. Подписи и проза при этом не трогаются —
-их правит человек, а числа приезжают из артефактов. После пересчёта порядок
-такой: `component_models` → `make_c5_tables --into` → `check_c5_numbers`.
+Режим `--into` подставляет свежие таблицы в указанный файл: находит «**Табл. N.**»
+и заменяет идущие за ней строки таблицы, не трогая подписи и прозу.
 
 Запуск:
   python -m scripts.make_c5_tables
-  python -m scripts.make_c5_tables --into путь/к/рукописи.md
+  python -m scripts.make_c5_tables --into файл.md
 """
 from __future__ import annotations
 
@@ -781,14 +779,14 @@ def table_runs(block: str) -> list[list[str]]:
 
 
 def splice(path: Path, blocks: dict[int, str]) -> int:
-    """Заменить таблицы в рукописи свежими, не трогая подписи и прозу."""
+    """Заменить таблицы в файле свежими, не трогая подписи и прозу."""
     text = path.read_text(encoding="utf-8")
     replaced = 0
     for number, block in blocks.items():
         anchor = f"**Табл. {number}.**"
         at = text.find(anchor)
         if at < 0:
-            print(f"  таблицы {number} в рукописи нет — пропущена")
+            print(f"  таблицы {number} в файле нет — пропущена")
             continue
         fresh = table_runs(block)
         lines = text[at:].split("\n")
@@ -812,7 +810,7 @@ def splice(path: Path, blocks: dict[int, str]) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--into", type=Path, help="подставить таблицы в рукопись")
+    ap.add_argument("--into", type=Path, help="подставить таблицы в файл")
     args = ap.parse_args()
 
     comp = load(COMPONENTS)
