@@ -388,18 +388,35 @@ def holm_bonferroni(pvals: Sequence[float], alpha: float = 0.05):
     """Holm step-down. Uniformly more powerful than Bonferroni, same FWER control.
 
     Returns adjusted p-values (monotone, in original order) and reject flags.
+
+    NaN entries are **not hypotheses**: a NaN means no test could be performed
+    (e.g. no students shared between the two sides, so the contrast has no
+    sample). They are excluded from the family size and come back as NaN with
+    ``reject=False``.
+
+    Why this is spelled out rather than left to the caller. The previous version
+    passed NaN through the loop, where ``np.argsort`` sorts it last and
+    ``max(running, nan)`` silently returns ``running`` — so a NaN inherited the
+    running maximum of the real p-values and was reported as *rejected* whenever
+    that maximum had not yet saturated at 1.0. The result depended on the other
+    p-values in the family: on the current artifacts the maximum does reach 1.0
+    before the NaNs, so nothing was wrong in what is published, but the same
+    family recomputed with a larger number of resamples (smaller p-values) would
+    have started reporting untested contrasts as significant.
     """
     p = np.asarray(pvals, dtype=float)
-    m = len(p)
-    order = np.argsort(p)
-    adj_sorted = np.empty(m, dtype=float)
-    running = 0.0
-    for rank, idx in enumerate(order):
-        val = (m - rank) * p[idx]
-        running = max(running, val)        # enforce monotonicity
-        adj_sorted[idx] = min(1.0, running)
-    return {"adjusted": adj_sorted.tolist(),
-            "reject": (adj_sorted <= alpha).tolist(), "alpha": alpha}
+    ok = ~np.isnan(p)
+    adj = np.full(p.size, np.nan, dtype=float)
+    m = int(ok.sum())
+    if m:
+        idx_ok = np.flatnonzero(ok)
+        order = idx_ok[np.argsort(p[idx_ok])]
+        running = 0.0
+        for rank, idx in enumerate(order):
+            running = max(running, (m - rank) * float(p[idx]))
+            adj[idx] = min(1.0, running)
+    return {"adjusted": adj.tolist(),
+            "reject": (ok & (adj <= alpha)).tolist(), "alpha": alpha}
 
 
 # --------------------------------------------------------------------------- #

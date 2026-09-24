@@ -64,7 +64,14 @@ def check(ok: bool, name: str, detail: str = "") -> None:
 
 # ---------------------------------------------------------------- текст
 def manuscript(path=None) -> str:
-    text = (path or PAPER).read_text(encoding="utf-8")
+    src = path or PAPER
+    if not src.exists():
+        raise SystemExit(
+            f"{src}: рукописи нет.\n"
+            f"Текст статьи в этот репозиторий не выкладывается, пока она не вышла.\n"
+            f"Укажите путь к нему аргументом:\n"
+            f"    python -m scripts.check_c5_numbers путь/к/рукописи.md")
+    text = src.read_text(encoding="utf-8")
     marks = list(re.finditer(r"^# Текст статьи$", text, re.M))
     if not marks:
         raise SystemExit(f"{PAPER}: не найден раздел «Текст статьи»")

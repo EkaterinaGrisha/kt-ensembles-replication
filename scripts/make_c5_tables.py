@@ -24,7 +24,7 @@
 
 Запуск:
   python -m scripts.make_c5_tables
-  python -m scripts.make_c5_tables --into paper/c5_ensembles_ru.md
+  python -m scripts.make_c5_tables --into путь/к/рукописи.md
 """
 from __future__ import annotations
 
